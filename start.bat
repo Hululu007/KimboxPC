@@ -8,6 +8,8 @@ echo            TVBox PC  (FongMi / TVBox 协议)
 echo ==================================================
 echo.
 
+set "PIDFILE=data\.server.pid"
+
 REM ---- 1. 检查 Node.js ----
 where node >nul 2>nul
 if errorlevel 1 goto NONODE
@@ -15,7 +17,6 @@ if errorlevel 1 goto NONODE
 for /f "delims=" %%v in ('node -p "process.versions.node"') do set NODEVER=%%v
 echo [OK] Node.js 版本: %NODEVER%
 
-REM ---- 2. 检查版本 22.5+ ----
 node -e "const p=process.versions.node.split('.').map(Number);process.exit(p[0]>22||(p[0]===22&&p[1]>=5)?0:1)"
 if errorlevel 1 goto OLDNODE
 
@@ -23,48 +24,64 @@ node -e "require('node:sqlite')" >nul 2>nul
 if errorlevel 1 goto NOSQLITE
 echo [OK] 内置 SQLite 可用
 
-REM ---- 3. 检查依赖 ----
+REM ---- 2. 检查依赖 ----
 if exist "node_modules\express" goto DEPSOK
 echo [..] 首次运行，正在安装依赖，请稍候...
 call npm install --omit=dev --no-audit --no-fund
 if errorlevel 1 goto DEPFAIL
 :DEPSOK
 echo [OK] 依赖已就绪
-set PROBE=0
 
-REM ---- 4. 是否已经在运行 ----
-powershell -NoProfile -Command "try{$null=Invoke-WebRequest -Uri 'http://127.0.0.1:3980' -UseBasicParsing -TimeoutSec 2;exit 0}catch{exit 1}" >nul 2>nul
-if not errorlevel 1 goto ALREADY
+REM ---- 3. 是否已有实例在运行 ----
+if not exist "%PIDFILE%" goto START
+set /p OLDPID=<"%PIDFILE%"
+tasklist /FI "PID eq %OLDPID%" | findstr "%OLDPID%" >nul
+if errorlevel 1 (
+    echo [..] 清理上次残留的进程记录
+    del /q "%PIDFILE%" >nul 2>nul
+    goto START
+)
 
-REM ---- 5. 启动 ----
 echo.
-echo [>>] 正在启动 http://127.0.0.1:3980
+echo [!!] 检测到已有一个 TVBox PC 服务在后台运行（PID=%OLDPID%）
+echo      它可能是之前窗口异常关闭后残留的，会占着数据库。
+echo.
+choice /C YN /N /M "      结束它并重新启动？(Y=重启  N=仅打开页面) "
+if errorlevel 2 goto OPENONLY
+
+echo [..] 正在结束旧进程 %OLDPID% ...
+taskkill /F /PID %OLDPID% >nul 2>nul
+del /q "%PIDFILE%" >nul 2>nul
+ping -n 2 127.0.0.1 >nul
+goto START
+
+:OPENONLY
+echo [OK] 已打开页面，本窗口可以关闭。
+start "" http://127.0.0.1:3980
+ping -n 2 127.0.0.1 >nul
+exit /b 0
+
+REM ---- 4. 启动 ----
+:START
+echo.
+echo [启动] 正在启动 http://127.0.0.1:3980
 echo.
 echo      服务运行期间本窗口会保持打开。
-echo      关闭本窗口 = 停止服务。
+echo      关闭本窗口 = 停止服务（数据库也会随之解锁）。
 echo.
 start "" http://127.0.0.1:3980
+set TVBOX_WATCH_PARENT=1
 node server.js
 
 echo.
 echo --------------------------------------------------
-echo  服务已停止，关闭本窗口即可。
+echo  服务已停止，数据库已解锁。
 echo.
-echo  如果上面出现报错，请对照处理：
-echo    EADDRINUSE  端口被占用 - 关掉其他窗口，或 set PORT=8090 再运行
-echo    MODULE_NOT_FOUND 依赖缺失 - 删除 node_modules 文件夹后重新双击
-echo    EACCES      目录不可写 - 换到有权限的目录，或检查杀毒软件
+echo  若上面有报错：
+echo    EADDRINUSE       端口被占用 - 先运行 stop.bat
+echo    MODULE_NOT_FOUND 依赖缺失   - 删除 node_modules 后重试
+echo    EACCES           目录不可写 - 换目录或检查杀毒软件
 echo --------------------------------------------------
-echo.
-pause
-exit /b 0
-
-:ALREADY
-echo [OK] 检测到服务已经运行中（端口 3980 已被占用）
-echo      已为你打开浏览器，本窗口可以关掉了。
-echo.
-start "" http://127.0.0.1:3980
-echo      不想保留那个后台服务的话：任务管理器结束 node.exe，或重启电脑。
 echo.
 pause
 exit /b 0

@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const PlayerLauncher = require('./playerLauncher');
@@ -10,6 +11,38 @@ const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups } = require('
 const app = express();
 const PORT = Number(process.env.PORT || 3980);
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// 记录进程号，供 stop.bat 精确停止（避免残留后台进程锁住数据库）
+const PID_FILE = path.join(__dirname, 'data', '.server.pid');
+function writePid() {
+  try {
+    if (!fs.existsSync(path.dirname(PID_FILE))) fs.mkdirSync(path.dirname(PID_FILE), { recursive: true });
+    fs.writeFileSync(PID_FILE, String(process.pid));
+  } catch (e) {}
+}
+function clearPid() {
+  try { if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE); } catch (e) {}
+}
+process.on('exit', clearPid);
+process.on('SIGINT', () => { clearPid(); process.exit(0); });
+process.on('SIGTERM', () => { clearPid(); process.exit(0); });
+process.on('SIGHUP', () => { clearPid(); process.exit(0); });
+
+// 由 start.bat 启动时，监控父窗口进程：窗口一关，服务自动退出，不留后台
+if (process.env.TVBOX_WATCH_PARENT === '1') {
+  const parentPid = process.ppid;
+  const watcher = setInterval(() => {
+    try {
+      process.kill(parentPid, 0);
+    } catch (e) {
+      clearInterval(watcher);
+      console.log('\n父窗口已关闭，服务自动停止。');
+      clearPid();
+      process.exit(0);
+    }
+  }, 3000);
+  if (watcher.unref) watcher.unref();
+}
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -527,6 +560,7 @@ app.post('/api/play/external', async (req, res) => {
 const server = app.listen(PORT);
 
 server.on('listening', async () => {
+  writePid();
   const bak = backup('startup');
   console.log('========================================');
   console.log('TVBox PC 版已就绪！');
