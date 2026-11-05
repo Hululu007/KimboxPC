@@ -1,0 +1,16 @@
+* text=auto
+
+# Windows 批处理必须是 CRLF，否则 cmd.exe 解析会出错（曾导致 start.bat 闪退）
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 其余源码统一 LF，跨平台一致
+*.js   text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+
+# 第三方压缩文件按二进制处理，避免被当作文本改写
+*.min.js -text

@@ -1,0 +1,20 @@
+{
+  "name": "tvbox-pc",
+  "version": "1.0.0",
+  "description": "TVBox / FongMi 协议的 Windows PC 播放客户端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["tvbox", "fongmi", "video", "player"],
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "axios": "^1.16.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  }
+}
