@@ -1718,10 +1718,17 @@
     async function playEpisode(url, resumeAt = 0) {
       const token = ++playToken;
       const video = document.getElementById('h5Player');
+
+      // 彻底重置媒体元素：只销毁 hls 实例时，video 上残留的 MediaSource
+      // 会把旧的解码状态带到新流上，换源/切集后容易出现怪声
+      try { video.pause(); } catch (e) {}
       if (hls) {
-        hls.destroy();
+        try { hls.destroy(); } catch (e) {}
         hls = null;
       }
+      video.removeAttribute('src');
+      try { video.load(); } catch (e) {}
+
       video.onerror = () => showToast('直连播放失败，可点右上角「用 PC 播放器播放」');
       showToast('正在加载视频...', 1500);
 
