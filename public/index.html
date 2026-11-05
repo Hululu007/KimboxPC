@@ -583,6 +583,29 @@
       white-space: nowrap;
     }
     .source-tab.active { background: var(--accent); font-weight: 600; }
+    .source-tab.all-src {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1px;
+      line-height: 1.25;
+      max-width: 190px;
+    }
+    .source-tab .src-name {
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 170px;
+    }
+    .source-tab .src-meta {
+      font-size: 10px;
+      color: #9fb3c0;
+    }
+    .source-tab.active .src-meta { color: rgba(255, 255, 255, 0.85); }
+    .source-tab .src-fast { color: #6bd47a; }
+    .source-tab .src-slow { color: #e0a45c; }
+    .src-loading { font-size: 12px; color: var(--text-muted); }
 
     .episodes-grid {
       display: grid;
@@ -769,6 +792,9 @@
         <button class="pv-toggle" id="pvToggleBtn" onclick="togglePanel()">展开 ▾</button>
       </div>
       <div class="pv-panel-body">
+        <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
+        <div class="source-tabs" id="mAllSources"><span class="src-loading">正在聚合各站点同片源…</span></div>
+
         <div class="row-label">选择播放源线路：</div>
         <div class="source-tabs" id="mSourceTabs"></div>
 
@@ -1307,6 +1333,59 @@
       return card;
     }
 
+    /* ==================== 同片源聚合（延迟排序） ==================== */
+
+    let pendingEpIdx = null;
+
+    async function loadAllSources(name, currentSiteKey) {
+      const box = document.getElementById('mAllSources');
+      if (!box) return;
+      box.innerHTML = '<span class="src-loading">正在聚合各站点同片源…（首次约 10 秒）</span>';
+
+      try {
+        const resp = await fetch(`/api/sources?name=${encodeURIComponent(name)}`);
+        const data = await resp.json();
+        const list = data.list || [];
+        box.innerHTML = '';
+
+        if (!list.length) {
+          box.innerHTML = '<span class="src-loading">其它站点暂未找到同名影片</span>';
+          return;
+        }
+
+        list.forEach(item => {
+          const chip = document.createElement('div');
+          chip.className = 'source-tab all-src' + (item.siteKey === currentSiteKey ? ' active' : '');
+          const ms = item.ms;
+          const cls = ms < 1000 ? 'src-fast' : (ms < 2500 ? '' : 'src-slow');
+          chip.title = `${item.siteName}\n线路: ${item.lines.join(' / ')}\n集数: ${item.episodes}\n响应: ${ms}ms`;
+
+          const n1 = document.createElement('span');
+          n1.className = 'src-name';
+          n1.textContent = item.siteName;
+
+          const n2 = document.createElement('span');
+          n2.className = 'src-meta ' + cls;
+          n2.textContent = `${ms}ms · ${item.lines.length} 线路`;
+
+          chip.appendChild(n1);
+          chip.appendChild(n2);
+
+          chip.onclick = () => switchToSource(item);
+          box.appendChild(chip);
+        });
+      } catch (e) {
+        box.innerHTML = `<span class="src-loading">聚合失败: ${e.message}</span>`;
+      }
+    }
+
+    // 换到另一个站点的同片源，尽量停留在同一集
+    function switchToSource(item) {
+      const keepEp = currentEpIdx;
+      showToast(`正在切换到 ${item.siteName}…`, 3000);
+      openDetail(item.vodId, item.siteKey, keepEp);
+    }
+
     /* ==================== 收藏 / 历史 ==================== */
 
     async function showFavorites(el) {
@@ -1441,7 +1520,7 @@
       list.forEach(v => grid.appendChild(buildCard(v)));
     }
 
-    async function openDetail(id, siteKey) {
+    async function openDetail(id, siteKey, targetEpIdx = null) {
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       document.body.style.overflow = 'hidden';
@@ -1452,6 +1531,7 @@
       document.getElementById('mEpisodes').innerHTML = '';
       document.getElementById('pvPanelLabel').textContent = '选集';
       setPanelCollapsed(true);
+      pendingEpIdx = (targetEpIdx === null || targetEpIdx === undefined) ? null : targetEpIdx;
       showToast('正在获取影片详情...', 6000);
 
       try {
@@ -1478,6 +1558,8 @@
         updateFavButton(!!detail.favorited);
 
         renderSources();
+        // 异步聚合同片源（不阻塞播放）
+        loadAllSources(detail.vod_name, detail.siteKey || activeSiteKey);
       } catch (e) {
         showToast('加载影片详情出错: ' + e.message, 3000);
       }
@@ -1588,6 +1670,12 @@
       if (h && !isManualSwitch && (!h.source || h.source === source.sourceName)) {
         startIdx = Math.min(Math.max(0, Number(h.ep_index) || 0), source.episodes.length - 1);
         resumeAt = Number(h.position) || 0;
+      }
+      // 从「同片源」切换过来：尽量停留在同一集
+      if (pendingEpIdx !== null && pendingEpIdx !== undefined) {
+        startIdx = Math.min(Math.max(0, pendingEpIdx), source.episodes.length - 1);
+        resumeAt = 0;
+        pendingEpIdx = null;
       }
 
       currentEpIdx = startIdx;

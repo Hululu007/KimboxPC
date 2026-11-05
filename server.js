@@ -277,6 +277,73 @@ app.get('/api/search/all', async (req, res) => {
   });
 });
 
+/* ==================== 同片源聚合（按延迟排序） ==================== */
+
+const sourceCache = new Map(); // name -> { at, data }
+const SOURCE_CACHE_TTL = 5 * 60 * 1000;
+
+const normName = (s) => String(s || '').replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】]/g, '').toLowerCase();
+
+app.get('/api/sources', async (req, res) => {
+  const name = String(req.query.name || '').trim();
+  if (!name) return res.json({ list: [], totalSites: 0, okSites: 0 });
+
+  const cacheKey = normName(name);
+  const hit = sourceCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < SOURCE_CACHE_TTL) {
+    return res.json({ ...hit.data, cached: true });
+  }
+
+  const sites = state.sites.filter(s => !s.isDexSpider && s.searchable !== 0);
+  if (sites.length === 0) return res.json({ list: [], totalSites: 0, okSites: 0 });
+
+  const target = normName(name);
+  const CONCURRENCY = 6;
+  const TIMEOUT = 9000;
+  const results = [];
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < sites.length) {
+      const site = sites[cursor++];
+      const t0 = Date.now();
+      try {
+        const s = await withTimeout(CmsEngine.search(site, name, 1), TIMEOUT);
+        const candidates = s.list || [];
+        // 片名完全一致，或包含关系（去掉标点后比较）
+        const match = candidates.find(v => normName(v.vod_name) === target)
+          || candidates.find(v => normName(v.vod_name).includes(target) || target.includes(normName(v.vod_name)));
+        if (!match) continue;
+
+        const d = await withTimeout(CmsEngine.getDetail({ api: site.api }, match.vod_id), TIMEOUT);
+        if (!d || !d.playSources || d.playSources.length === 0) continue;
+
+        results.push({
+          siteKey: site.key,
+          siteName: site.name,
+          vodId: match.vod_id,
+          vodName: d.vod_name || match.vod_name,
+          pic: match.vod_pic || '',
+          lines: d.playSources.map(p => p.sourceName),
+          episodes: d.playSources.reduce((m, p) => Math.max(m, (p.episodes || []).length), 0),
+          ms: Date.now() - t0
+        });
+      } catch (e) {
+        /* 超时或站点异常，忽略该站 */
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, sites.length) }, worker));
+  results.sort((a, b) => a.ms - b.ms);
+
+  const data = { list: results, totalSites: sites.length, okSites: results.length };
+  sourceCache.set(cacheKey, { at: Date.now(), data });
+  if (sourceCache.size > 200) sourceCache.delete(sourceCache.keys().next().value);
+
+  res.json(data);
+});
+
 /* ==================== 播放历史 ==================== */
 
 app.get('/api/history', (req, res) => {
