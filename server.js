@@ -9,7 +9,20 @@ const PlayerLauncher = require('./playerLauncher');
 const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups } = require('./db');
 
 const app = express();
-const PORT = Number(process.env.PORT || 3980);
+// 端口优先级：环境变量 PORT > port.txt > 3980
+function readPort() {
+  if (process.env.PORT) {
+    const n = Number(process.env.PORT);
+    if (Number.isInteger(n) && n > 0 && n < 65536) return n;
+  }
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'port.txt'), 'utf8').trim().split(/\r?\n/)[0].trim();
+    const n = Number(raw);
+    if (Number.isInteger(n) && n > 0 && n < 65536) return n;
+  } catch (e) {}
+  return 3980;
+}
+const PORT = readPort();
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // 记录进程号，供 stop.bat 精确停止（避免残留后台进程锁住数据库）

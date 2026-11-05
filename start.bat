@@ -10,6 +10,17 @@ echo.
 
 set "PIDFILE=data\.server.pid"
 
+REM ---- 读取端口配置（port.txt，默认 3980）----
+set "PORTVAL=3980"
+if exist "%~dp0port.txt" for /f "usebackq delims=" %%p in ("%~dp0port.txt") do set "PORTVAL=%%p"
+set "PORTVAL=%PORTVAL: =%"
+echo %PORTVAL%| findstr /R /C:"^[0-9][0-9]*$" >nul
+if errorlevel 1 (
+    echo [!!] port.txt 内容无效，回退到默认端口 3980
+    set "PORTVAL=3980"
+)
+set "PORT=%PORTVAL%"
+
 REM ---- 0. 优先使用随附的便携版 Node（免安装、免 UAC、版本固定）----
 set "PORTABLE="
 for /d %%d in ("%~dp0node-v*-win-x64") do if exist "%%~fd\node.exe" set "PORTABLE=%%~fd"
@@ -19,7 +30,7 @@ if defined PORTABLE (
     echo [OK] 使用随附便携版 Node.js: %PORTABLE%
 )
 
-REM ---- 1. 检查 Node.js（缺失则尝试本地安装包静默安装）----
+REM ---- 1. 检查 Node.js ----
 :NODECHECK
 where node >nul 2>nul
 if errorlevel 1 goto TRYINSTALL
@@ -33,6 +44,7 @@ if errorlevel 1 goto OLDNODE
 node -e "require('node:sqlite')" >nul 2>nul
 if errorlevel 1 goto NOSQLITE
 echo [OK] 内置 SQLite 可用
+echo [OK] 使用端口: %PORTVAL%   （改这一行请编辑 port.txt）
 goto DEPSCHECK
 
 REM ---- 1b. 未安装 Node：用 Setup 目录里的 msi 静默安装 ----
@@ -111,19 +123,19 @@ goto START
 
 :OPENONLY
 echo [OK] 已打开页面，本窗口可以关闭。
-start "" http://127.0.0.1:3980
+start "" http://127.0.0.1:%PORTVAL%
 ping -n 2 127.0.0.1 >nul
 exit /b 0
 
 REM ---- 4. 启动 ----
 :START
 echo.
-echo [启动] http://127.0.0.1:3980
+echo [启动] http://127.0.0.1:%PORTVAL%
 echo.
 echo      服务运行期间本窗口会保持打开。
 echo      关闭本窗口 = 停止服务（数据库也会随之解锁）。
 echo.
-start "" http://127.0.0.1:3980
+start "" http://127.0.0.1:%PORTVAL%
 set TVBOX_WATCH_PARENT=1
 node server.js
 
@@ -132,7 +144,7 @@ echo --------------------------------------------------
 echo  服务已停止，数据库已解锁。
 echo.
 echo  若上面有报错：
-echo    EADDRINUSE       端口被占用 - 先运行 stop.bat
+echo    EADDRINUSE       端口被占用 - 改 port.txt 里的端口号，或先运行 stop.bat
 echo    MODULE_NOT_FOUND 依赖缺失   - 删除 node_modules 后重试
 echo    EACCES           目录不可写 - 换目录或检查杀毒软件
 echo --------------------------------------------------
