@@ -28,14 +28,27 @@
 
 | 项目 | 是否必需 | 说明 |
 |---|---|---|
-| **Node.js 22.5+**（推荐 24） | ✅ 必需 | 唯一需要手动安装的东西，[nodejs.org](https://nodejs.org) 下载 LTS 版即可；内置 `node:sqlite` 依赖 22.5 以上 |
-| 本地 Node 安装包（可选） | ⚪ 免手动 | 把 `node-*-x64.msi` 放进 `Setup/` 目录，`start.bat` 检测到没有 Node 时会**静默安装**（会弹一次 UAC 授权） |
+| **随附便携版 Node**（推荐） | ⚪ 免安装 | 把官方 `node-vXX-win-x64` 解压到项目根目录即可，`start.bat` 会**优先使用它**并加到 PATH 最前面——不装系统 Node、不弹 UAC、版本固定 |
+| **Node.js 22.5+**（推荐 24） | ✅ 备选 | 没放便携版时使用系统已安装的 Node；[nodejs.org](https://nodejs.org) 下载 LTS 版 |
+| 本地 Node 安装包（可选） | ⚪ 免手动 | 把 `node-*-x64.msi` 放进 `Setup/`，都没检测到时**静默安装**（会弹一次 UAC） |
 | npm 依赖（express / axios / cors） | ⚪ 自动 | 首次双击 `start.bat` 会自动 `npm install`（需联网一次），之后离线可跑 |
 | hls.js | ⚪ 已内置 | 已放在 `public/vendor/hls.min.js`，不再依赖 CDN |
 | ffplay / mpv / PotPlayer / VLC | 🔵 可选 | 只有点「用 PC 播放器播放」时才需要；没有也不影响网页内播放 |
 | Python / Java / Android SDK | ❌ 不需要 | 本项目纯 Node 实现 |
 
-**也就是说：装好 Node.js 之后，双击 `start.bat` 就能跑。**
+**启动时的 Node 查找顺序**：
+
+```
+随附便携版（node-v*-win-x64\node.exe）+ 加到 PATH 最前
+  ↓ 没有
+系统已安装的 node（PATH 中）
+  ↓ 没有
+Setup\node-*.msi 静默安装（弹一次 UAC）
+  ↓ 都没有
+提示手动安装
+```
+
+**装好 Node 之后，双击 `start.bat` 就能跑。**
 
 `start.bat` 启动时会自动检查：Node 是否存在 → 版本是否 ≥ 22.5 → `node:sqlite` 是否可用 → `node_modules` 是否存在（缺失则自动安装）。任何一步失败都会给出中文提示，不会一闪而过。
 

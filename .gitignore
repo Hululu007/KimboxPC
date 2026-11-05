@@ -4,6 +4,8 @@ npm-debug.log*
 yarn-error.log*
 
 # 本地安装包（体积大，按需自行放置）
+node-v*-win-x64/
+node/
 Setup/
 
 # 运行期数据（配置源、收藏、观看记录、备份）——属于本地隐私数据，不入库

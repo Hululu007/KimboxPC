@@ -10,6 +10,15 @@ echo.
 
 set "PIDFILE=data\.server.pid"
 
+REM ---- 0. 优先使用随附的便携版 Node（免安装、免 UAC、版本固定）----
+set "PORTABLE="
+for /d %%d in ("%~dp0node-v*-win-x64") do if exist "%%~fd\node.exe" set "PORTABLE=%%~fd"
+if not defined PORTABLE if exist "%~dp0node\node.exe" set "PORTABLE=%~dp0node"
+if defined PORTABLE (
+    set "PATH=%PORTABLE%;%PATH%"
+    echo [OK] 使用随附便携版 Node.js: %PORTABLE%
+)
+
 REM ---- 1. 检查 Node.js（缺失则尝试本地安装包静默安装）----
 :NODECHECK
 where node >nul 2>nul
@@ -33,7 +42,7 @@ for %%f in ("%~dp0Setup\node-*.msi") do if exist "%%~ff" set "MSI=%%~ff"
 if not defined MSI goto NONODE
 
 echo.
-echo [!!] 未检测到 Node.js
+echo [!!] 未检测到 Node.js（也没有随附便携版）
 echo      发现本地安装包: %MSI%
 echo.
 echo [..] 正在静默安装，约需 1 分钟
@@ -132,18 +141,19 @@ pause
 exit /b 0
 
 :NONODE
-echo [X] 没有找到 Node.js，且 Setup 目录里也没有安装包
+echo [X] 没有可用的 Node.js
 echo.
-echo     解决办法二选一：
-echo       1) 把 node-vXX-x64.msi 放进 Setup 文件夹，再双击本文件
-echo       2) 到 https://nodejs.org 下载 Node.js 22.5 或更高版本安装
+echo     三种解决办法，任选其一：
+echo       1) 解压官方便携版到本目录，文件夹名保持 node-vXX-win-x64
+echo       2) 把 node-vXX-x64.msi 放进 Setup 文件夹（会自动静默安装）
+echo       3) 到 https://nodejs.org 手动安装 Node.js 22.5 或更高版本
 echo.
 pause
 exit /b 1
 
 :OLDNODE
 echo [X] Node.js 版本过低: %NODEVER%
-echo     需要 22.5 以上，请到 https://nodejs.org 下载新版。
+echo     需要 22.5 以上。建议解压官方便携版到本目录覆盖使用。
 echo.
 pause
 exit /b 1
