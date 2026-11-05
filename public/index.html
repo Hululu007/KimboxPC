@@ -1711,7 +1711,11 @@
       el._t = setTimeout(() => el.classList.remove('show'), timeout);
     }
 
-    function playEpisode(url, resumeAt = 0) {
+    const DIRECT_MEDIA_RE = /\.(m3u8|mp4|flv|mkv|ts|webm|mp3|m4a)(\?|#|$)/i;
+    let playToken = 0;
+
+    async function playEpisode(url, resumeAt = 0) {
+      const token = ++playToken;
       const video = document.getElementById('h5Player');
       if (hls) {
         hls.destroy();
@@ -1720,16 +1724,32 @@
       video.onerror = () => showToast('直连播放失败，可点右上角「用 PC 播放器播放」');
       showToast('正在加载视频...', 1500);
 
+      // 有些源给的是网页播放页，需要先解析出真实视频地址
+      let finalUrl = url;
+      if (!DIRECT_MEDIA_RE.test(url)) {
+        showToast('该源需要解析播放地址，正在解析…', 8000);
+        try {
+          const r = await (await fetch(`/api/resolve?url=${encodeURIComponent(url)}`)).json();
+          if (token !== playToken) return;
+          if (r.error || !r.url) throw new Error(r.error || '解析失败');
+          finalUrl = r.url;
+        } catch (e) {
+          if (token !== playToken) return;
+          showToast('这个源无法直接播放：' + e.message + '，建议换一个源', 6000);
+          return;
+        }
+      }
+
       const seek = () => {
         if (resumeAt > 1) {
           try { video.currentTime = resumeAt; } catch (e) {}
         }
       };
 
-      if (url.includes('.m3u8')) {
+      if (finalUrl.includes('.m3u8')) {
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           hls = new Hls({ maxBufferLength: 30 });
-          hls.loadSource(url);
+          hls.loadSource(finalUrl);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             document.getElementById('pvToast').classList.remove('show');
@@ -1746,14 +1766,14 @@
             }
           });
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = url;
+          video.src = finalUrl;
           video.addEventListener('loadedmetadata', seek, { once: true });
           video.play().catch(() => {});
         } else {
           showToast('当前浏览器不支持 HLS 播放');
         }
       } else {
-        video.src = url;
+        video.src = finalUrl;
         video.addEventListener('loadedmetadata', seek, { once: true });
         video.play().catch(() => {});
       }
@@ -1776,13 +1796,27 @@
       const player = playerSel ? playerSel.value : '';
       savePlayerChoice(player);
 
+      // 网页播放页需要先解析成直链，外部播放器才能打开
+      let playUrl = ep.url;
+      if (!DIRECT_MEDIA_RE.test(playUrl)) {
+        showToast('正在解析播放地址…', 8000);
+        try {
+          const rr = await (await fetch(`/api/resolve?url=${encodeURIComponent(playUrl)}`)).json();
+          if (rr.error || !rr.url) throw new Error(rr.error || '解析失败');
+          playUrl = rr.url;
+        } catch (e) {
+          showToast('该源无法解析出直链：' + e.message + '，建议换个源', 6000);
+          return;
+        }
+      }
+
       showToast('正在唤起外部播放器...', 4000);
       try {
         const resp = await fetch('/api/play/external', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            url: ep.url,
+            url: playUrl,
             title: `${currentDetail.vod_name} - ${ep.title}`,
             player
           })
@@ -1954,8 +1988,9 @@
       const dur = isFinite(pvVideo.duration) ? pvVideo.duration : 0;
 
       if (!isSeekDragging() && !seeking) {
+        const durLabel = !isFinite(dur) ? (dur === Infinity ? '直播' : '--:--') : fmtTime(dur);
         document.getElementById('ctrlTime').textContent =
-          `${fmtTime(pvVideo.currentTime)} / ${dur > 0 ? fmtTime(dur) : '直播'}`;
+          `${fmtTime(pvVideo.currentTime)} / ${durLabel}`;
         paintSlider('seekFill', 'seekThumb', dur > 0 ? pvVideo.currentTime / dur : 0);
       }
 

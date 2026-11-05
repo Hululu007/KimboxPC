@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
 const ConfigParser = require('./configParser');
@@ -8,6 +9,7 @@ const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups } = require('
 
 const app = express();
 const PORT = Number(process.env.PORT || 3980);
+const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -275,6 +277,84 @@ app.get('/api/search/all', async (req, res) => {
     okSites: status.filter(s => !s.error && s.count > 0).length,
     failedSites: status.filter(s => s.error).length
   });
+});
+
+/* ==================== 播放地址解析（网页源 → 直链） ==================== */
+
+const resolveCache = new Map();
+
+function looksDirect(url) {
+  return /\.(m3u8|mp4|flv|mkv|ts|webm|mp3|m4a)(\?|#|$)/i.test(url);
+}
+
+async function probeMedia(url) {
+  try {
+    const r = await axios.head(url, {
+      timeout: 8000,
+      maxRedirects: 5,
+      validateStatus: (s) => s < 400,
+      headers: { 'User-Agent': DESKTOP_UA }
+    });
+    const ct = String(r.headers['content-type'] || '').toLowerCase();
+    return (
+      ct.includes('mpegurl') || ct.includes('video') ||
+      ct.includes('octet-stream') || ct.includes('mp2t') || ct === ''
+    );
+  } catch (e) {
+    return false;
+  }
+}
+
+async function resolveMediaUrl(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!url) throw new Error('空地址');
+  if (looksDirect(url)) return { url, resolved: false, direct: true };
+  if (resolveCache.has(url)) return { url: resolveCache.get(url), resolved: true, cached: true };
+
+  let origin = '';
+  try { origin = new URL(url).origin; } catch (e) {}
+
+  const resp = await axios.get(url, {
+    timeout: 12000,
+    maxRedirects: 5,
+    responseType: 'text',
+    headers: {
+      'User-Agent': DESKTOP_UA,
+      'Referer': origin + '/',
+      'Accept': 'text/html,application/xhtml+xml'
+    }
+  });
+
+  const html = String(resp.data || '');
+
+  // 1) 页面里直接写着的 m3u8 / mp4 地址
+  const matches = [...html.matchAll(/https?:\/\/[^'"\s<>\\)]+?\.(?:m3u8|mp4|flv)[^'"\s<>\\)]*/gi)]
+    .map(m => m[0].replace(/\\\//g, '/'));
+
+  // 2) 播页后拼接 /index.m3u8 的常见形式
+  if (!matches.length) {
+    matches.push(url.replace(/\/+$/, '') + '/index.m3u8');
+  }
+
+  for (const candidate of matches) {
+    if (await probeMedia(candidate)) {
+      resolveCache.set(url, candidate);
+      if (resolveCache.size > 500) resolveCache.delete(resolveCache.keys().next().value);
+      return { url: candidate, resolved: true };
+    }
+  }
+
+  throw new Error('页面中未找到可播放的视频地址');
+}
+
+app.get('/api/resolve', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  try {
+    res.json(await resolveMediaUrl(url));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /* ==================== 同片源聚合（按延迟排序） ==================== */
