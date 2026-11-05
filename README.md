@@ -29,6 +29,7 @@
 | 项目 | 是否必需 | 说明 |
 |---|---|---|
 | **Node.js 22.5+**（推荐 24） | ✅ 必需 | 唯一需要手动安装的东西，[nodejs.org](https://nodejs.org) 下载 LTS 版即可；内置 `node:sqlite` 依赖 22.5 以上 |
+| 本地 Node 安装包（可选） | ⚪ 免手动 | 把 `node-*-x64.msi` 放进 `Setup/` 目录，`start.bat` 检测到没有 Node 时会**静默安装**（会弹一次 UAC 授权） |
 | npm 依赖（express / axios / cors） | ⚪ 自动 | 首次双击 `start.bat` 会自动 `npm install`（需联网一次），之后离线可跑 |
 | hls.js | ⚪ 已内置 | 已放在 `public/vendor/hls.min.js`，不再依赖 CDN |
 | ffplay / mpv / PotPlayer / VLC | 🔵 可选 | 只有点「用 PC 播放器播放」时才需要；没有也不影响网页内播放 |
