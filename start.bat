@@ -21,6 +21,14 @@ if errorlevel 1 (
 )
 set "PORT=%PORTVAL%"
 
+REM ---- 读取监听地址（host.txt，默认 127.0.0.1 仅本机）----
+set "HOSTVAL=127.0.0.1"
+if exist "%~dp0host.txt" for /f "usebackq delims=" %%h in ("%~dp0host.txt") do set "HOSTVAL=%%h"
+set "HOSTVAL=%HOSTVAL: =%"
+if "%HOSTVAL%"=="" set "HOSTVAL=127.0.0.1"
+set "BROWSERHOST=127.0.0.1"
+if not "%HOSTVAL%"=="0.0.0.0" if not "%HOSTVAL%"=="127.0.0.1" if not "%HOSTVAL%"=="localhost" set "BROWSERHOST=%HOSTVAL%"
+
 REM ---- 0. 优先使用随附的便携版 Node（免安装、免 UAC、版本固定）----
 set "PORTABLE="
 for /d %%d in ("%~dp0node-v*-win-x64") do if exist "%%~fd\node.exe" set "PORTABLE=%%~fd"
@@ -44,7 +52,12 @@ if errorlevel 1 goto OLDNODE
 node -e "require('node:sqlite')" >nul 2>nul
 if errorlevel 1 goto NOSQLITE
 echo [OK] 内置 SQLite 可用
-echo [OK] 使用端口: %PORTVAL%   （改这一行请编辑 port.txt）
+echo [OK] 使用端口: %PORTVAL%   （改端口编辑 port.txt）
+if "%HOSTVAL%"=="0.0.0.0" (
+    echo [OK] 监听地址: 0.0.0.0  ^(已开放局域网，控制台会打印局域网地址^)
+) else (
+    echo [OK] 监听地址: %HOSTVAL%   ^(仅本机；要开局域网请把 host.txt 改成 0.0.0.0^)
+)
 goto DEPSCHECK
 
 REM ---- 1b. 未安装 Node：用 Setup 目录里的 msi 静默安装 ----
@@ -123,7 +136,7 @@ goto START
 
 :OPENONLY
 echo [OK] 已打开页面，本窗口可以关闭。
-start "" http://127.0.0.1:%PORTVAL%
+start "" http://%BROWSERHOST%:%PORTVAL%
 ping -n 2 127.0.0.1 >nul
 exit /b 0
 
@@ -135,7 +148,7 @@ echo.
 echo      服务运行期间本窗口会保持打开。
 echo      关闭本窗口 = 停止服务（数据库也会随之解锁）。
 echo.
-start "" http://127.0.0.1:%PORTVAL%
+start "" http://%BROWSERHOST%:%PORTVAL%
 set TVBOX_WATCH_PARENT=1
 node server.js
 

@@ -1,6 +1,6 @@
 {
   "name": "tvbox-pc",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "TVBox / FongMi 协议的 Windows PC 播放客户端",
   "main": "server.js",
   "scripts": {
