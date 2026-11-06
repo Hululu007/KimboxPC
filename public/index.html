@@ -759,6 +759,26 @@
     }
     .play-overlay:hover .po-btn { transform: scale(1.06); }
     .play-overlay .po-text { font-size: 13px; color: #e6edf3; }
+
+    /* mpv 内核模式：画面在独立窗口，这里只做状态展示与控制 */
+    .mpv-stage {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: #05070a;
+      color: var(--text-muted);
+      text-align: center;
+      z-index: 4;
+    }
+    .mpv-stage.show { display: flex; }
+    .mpv-stage .mpv-icon { font-size: 46px; opacity: 0.9; }
+    .mpv-stage .mpv-title { font-size: 15px; color: #dfe7ee; font-weight: 600; }
+    .mpv-stage .mpv-sub { font-size: 12px; color: #6b7c8a; }
+    .mpv-stage button { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -859,6 +879,10 @@
         <div class="pv-sub" id="mMeta"></div>
       </div>
       <div class="pv-spacer"></div>
+      <select class="ctrl-rate" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
+        <option value="browser">浏览器</option>
+        <option value="mpv">mpv 内核</option>
+      </select>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
       <button class="secondary" onclick="toggleFullscreen()">⛶ 全屏 (F)</button>
       <select class="ctrl-rate" id="playerSel" title="选择外部播放器"></select>
@@ -868,6 +892,12 @@
     <div class="pv-stage" id="pvStage">
       <video id="h5Player" playsinline></video>
       <div class="pv-toast" id="pvToast"></div>
+      <div class="mpv-stage" id="mpvStage">
+        <div class="mpv-icon">🎬</div>
+        <div class="mpv-title" id="mpvStageTitle">正在 mpv 窗口中播放</div>
+        <div class="mpv-sub">播放画面在独立的 mpv 窗口，进度/选集仍可在此控制</div>
+        <button class="ghost-btn" onclick="focusMpvWindow()">显示 mpv 窗口</button>
+      </div>
       <div class="play-overlay" id="playOverlay" onclick="resumePlay()">
         <div class="po-btn">▶</div>
         <div class="po-text" id="playOverlayText">点击继续播放</div>
@@ -1702,7 +1732,109 @@
         .catch(() => {});
     }
 
-    /* ==================== 兼容模式（服务端转封装） ==================== */
+    /* ==================== mpv 内核播放 ==================== */
+    // 解码交给 mpv（ffmpeg 系），彻底规避浏览器 MSE 的音频异常。
+    // 网页只负责浏览/选集/进度控制，通过 /api/mpv/* 驱动 mpv。
+
+    const mpvState = { running: false, position: 0, duration: 0, paused: true, title: '' };
+    let mpvTimer = null;
+
+    function engineMode() {
+      try { return localStorage.getItem('tvbox_engine') || 'browser'; } catch (e) { return 'browser'; }
+    }
+    function isMpv() { return engineMode() === 'mpv'; }
+
+    function initEngineSel() {
+      const sel = document.getElementById('engineSel');
+      if (sel) sel.value = engineMode();
+    }
+
+    function changeEngine(v) {
+      try { localStorage.setItem('tvbox_engine', v); } catch (e) {}
+      if (v === 'mpv') showToast('已切换到 mpv 内核，正在重载…', 2500);
+      if (currentDetail) reloadCurrentEpisode(true);
+      else syncEngineUI();
+    }
+
+    function syncEngineUI() {
+      const stage = document.getElementById('mpvStage');
+      if (stage) stage.classList.toggle('show', isMpv());
+    }
+
+    function focusMpvWindow() {
+      fetch('/api/mpv/cmd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'set_property', args: ['ontop', true] })
+      }).catch(() => {});
+      setTimeout(() => {
+        fetch('/api/mpv/cmd', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'set_property', args: ['ontop', false] })
+        }).catch(() => {});
+      }, 800);
+    }
+
+    async function openMpv(url, startAt = 0) {
+      destroyCompat();
+      if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+      try { pvVideo.pause(); } catch (e) {}
+      try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
+
+      syncEngineUI();
+      const title = currentDetail
+        ? `${currentDetail.vod_name} - ${(currentDetail.playSources[currentSourceIdx] || {}).episodes?.[currentEpIdx]?.title || ''}`
+        : 'KimBoxPC';
+      const t = document.getElementById('mpvStageTitle');
+      if (t) t.textContent = '正在启动 mpv…';
+
+      try {
+        const r = await fetch('/api/mpv/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, title, start: Math.max(0, Math.floor(startAt || 0)) })
+        });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        if (t) t.textContent = '正在 mpv 窗口中播放';
+        startMpvPolling();
+      } catch (e) {
+        if (t) t.textContent = 'mpv 启动失败：' + e.message;
+        showToast('mpv 启动失败：' + e.message, 5000);
+      }
+    }
+
+    function startMpvPolling() {
+      stopMpvPolling();
+      mpvTimer = setInterval(async () => {
+        if (!document.getElementById('playerView').classList.contains('active')) return;
+        try {
+          const s = await (await fetch('/api/mpv/state')).json();
+          if (!s) return;
+          mpvState.running = !!s.running;
+          mpvState.paused = !!s.paused;
+          mpvState.position = s.position || 0;
+          mpvState.duration = s.duration || 0;
+          mpvState.title = s.title || '';
+          updateControls();
+        } catch (e) {}
+      }, 1000);
+    }
+
+    function stopMpvPolling() {
+      if (mpvTimer) { clearInterval(mpvTimer); mpvTimer = null; }
+    }
+
+    async function mpvCmd(name, args) {
+      try {
+        await fetch('/api/mpv/cmd', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, args })
+        });
+      } catch (e) {}
+    }
     // 问题：部分源带 DISCONTINUITY，Chrome MSE 音频渲染会出错（变调/发闷）。
     // 方案：/api/remux 用 ffmpeg -c copy 重排时间戳后以 MPEG-TS 供流，mpegts.js 播放。
     // 拖动 = 以新位置重启 ffmpeg（约 2~3 秒）。
@@ -2106,7 +2238,7 @@
           epName: ep.title,
           epIndex: currentEpIdx,
           epUrl: ep.url,
-          position: compat.on ? compatPosition() : (isFinite(v.currentTime) ? v.currentTime : 0),
+          position: isMpv() ? (mpvState.position || 0) : (compat.on ? compatPosition() : (isFinite(v.currentTime) ? v.currentTime : 0)),
           duration: isFinite(v.duration) ? v.duration : 0
         })
       }).catch(() => {});
@@ -2234,6 +2366,14 @@
         }
       }
 
+      // mpv 内核模式：解码交给 mpv，网页只做控制
+      if (isMpv()) {
+        openMpv(finalUrl, resumeAt || 0);
+        probeAndWarn(finalUrl, true);
+        return;
+      }
+      syncEngineUI();
+
       // 兼容模式：改走服务端转封装，彻底规避时间戳重置导致的音频异常
       if (compatEnabled() && finalUrl.includes('.m3u8')) {
         playCompat(finalUrl, resumeAt || 0);
@@ -2357,6 +2497,7 @@
     function closePlayer() {
       saveHistory(true);
       destroyCompat();
+      if (isMpv()) { stopMpvPolling(); fetch('/api/mpv/stop', { method: 'POST' }).catch(() => {}); }
       const video = document.getElementById('h5Player');
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       video.pause();
@@ -2473,6 +2614,7 @@
 
     /** 当前可用的总时长（兼容模式用探测出来的真实时长） */
     function seekDuration() {
+      if (isMpv()) return mpvState.duration || 0;
       if (compat.on && compat.duration > 0) return compat.duration;
       const d = pvVideo.duration;
       return isFinite(d) ? d : 0;
@@ -2507,6 +2649,7 @@
      */
     function seekTo(target) {
       if (!isFinite(target) || target < 0) return;
+      if (isMpv()) { mpvCmd('seek', [target, 'absolute']); return; }
       if (compat.on) { compatSeek(target); return; }
       const wasPlaying = !pvVideo.paused;
 
@@ -2648,6 +2791,12 @@
     attachSlider(
       document.getElementById('volBar'),
       (p) => {
+        if (isMpv()) {
+          mpvCmd('set_property', ['volume', Math.round(Math.min(1, Math.max(0, p)) * 100)]);
+          paintSlider('volFill', 'volThumb', p);
+          document.getElementById('btnMute').innerHTML = p === 0 ? ICON.mute : ICON.vol;
+          return;
+        }
         pvVideo.muted = p === 0;
         pvVideo.volume = Math.min(1, Math.max(0, p));
         paintSlider('volFill', 'volThumb', pvVideo.muted ? 0 : pvVideo.volume);
@@ -2657,6 +2806,18 @@
     );
 
     function updateControls() {
+      if (isMpv()) {
+        const dur = mpvState.duration || 0;
+        const pos = mpvState.position || 0;
+        if (!isSeekDragging() && !seeking) {
+          document.getElementById('ctrlTime').textContent =
+            `${fmtTime(pos)} / ${dur > 0 ? fmtTime(dur) : '--:--'}`;
+          paintSlider('seekFill', 'seekThumb', dur > 0 ? pos / dur : 0);
+        }
+        document.getElementById('btnPlay').innerHTML = mpvState.paused ? ICON.play : ICON.pause;
+        return;
+      }
+
       const dur = compat.on
         ? (compat.duration || 0)
         : (isFinite(pvVideo.duration) ? pvVideo.duration : 0);
@@ -2694,12 +2855,14 @@
     updateControls();
 
     function togglePlay() {
+      if (isMpv()) { mpvCmd('cycle', ['pause']); showBars(); return; }
       if (pvVideo.paused) pvVideo.play().catch(() => {});
       else pvVideo.pause();
       showBars();
     }
 
     function toggleMute() {
+      if (isMpv()) { mpvCmd('cycle', ['mute']); showBars(); return; }
       pvVideo.muted = !pvVideo.muted;
       if (!pvVideo.muted && pvVideo.volume === 0) pvVideo.volume = 1;
       updateControls();
@@ -2707,6 +2870,7 @@
     }
 
     function setRate(rate) {
+      if (isMpv()) { mpvCmd('set_property', ['speed', Number(rate)]); showBars(); return; }
       pvVideo.playbackRate = Number(rate);
       showBars();
     }
@@ -2719,6 +2883,7 @@
     pvVideo.addEventListener('dblclick', () => toggleFullscreen());
 
     function toggleFullscreen() {
+      if (isMpv()) { mpvCmd('cycle', ['fullscreen']); return; }
       const view = document.getElementById('playerView');
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
