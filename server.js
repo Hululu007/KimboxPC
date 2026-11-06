@@ -464,6 +464,82 @@ app.get('/api/resolve', async (req, res) => {
   }
 });
 
+/* ==================== 转封装兼容模式（修复声音异常） ==================== */
+// 部分源的播放列表带 DISCONTINUITY（时间戳重置），Chrome 的 MSE 音频渲染会出错。
+// 用 ffmpeg -c copy 重新封装成时间戳连续的 MPEG-TS 直供浏览器，可彻底规避。
+// 拖动进度 = 以新位置重启 ffmpeg（约 2~3 秒）。
+
+const { spawn } = require('child_process');
+
+let ffmpegPath = null;
+function findFfmpeg() {
+  if (ffmpegPath !== null) return ffmpegPath;
+  const cands = [
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'),
+    'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'ffmpeg', 'bin', 'ffmpeg.exe')
+  ];
+  for (const c of cands) {
+    try { if (c && fs.existsSync(c)) { ffmpegPath = c; return ffmpegPath; } } catch (e) {}
+  }
+  ffmpegPath = 'ffmpeg';   // 依赖 PATH
+  return ffmpegPath;
+}
+
+const remuxSessions = new Set();
+const REMUX_MAX = 3;
+
+app.get('/api/remux/status', (req, res) => {
+  res.json({ available: !!findFfmpeg(), ffmpeg: findFfmpeg(), active: remuxSessions.size, max: REMUX_MAX });
+});
+
+app.get('/api/remux', (req, res) => {
+  const url = String(req.query.url || '').trim();
+  const start = Math.max(0, Number(req.query.start || 0) || 0);
+  if (!url) return res.status(400).json({ error: '缺少 url' });
+
+  // 超出并发上限时踢掉最早的一个
+  while (remuxSessions.size >= REMUX_MAX) {
+    const oldest = remuxSessions.values().next().value;
+    try { oldest.kill('SIGKILL'); } catch (e) {}
+    remuxSessions.delete(oldest);
+  }
+
+  const args = [
+    '-hide_banner', '-loglevel', 'error',
+    '-user_agent', DESKTOP_UA,
+    '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3',
+    ...(start > 0 ? ['-ss', String(start)] : []),
+    '-i', url,
+    '-c', 'copy', '-fflags', '+genpts',
+    '-muxdelay', '0', '-muxpreload', '0',
+    '-f', 'mpegts', 'pipe:1'
+  ];
+
+  let proc;
+  try {
+    proc = spawn(findFfmpeg(), args, { windowsHide: true });
+  } catch (e) {
+    return res.status(500).json({ error: '无法启动 ffmpeg: ' + e.message });
+  }
+
+  remuxSessions.add(proc);
+  res.setHeader('Content-Type', 'video/mp2t');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Connection', 'close');
+
+  proc.stdout.pipe(res);
+
+  const stop = () => {
+    remuxSessions.delete(proc);
+    try { proc.kill('SIGKILL'); } catch (e) {}
+  };
+  req.on('close', stop);
+  res.on('close', stop);
+  proc.on('error', () => { try { res.end(); } catch (e) {} stop(); });
+  proc.on('exit', () => { remuxSessions.delete(proc); try { res.end(); } catch (e) {} });
+});
+
 /* ==================== 播放列表质量探测 ==================== */
 
 const probeCache = new Map();
@@ -483,9 +559,11 @@ async function probePlaylist(url) {
       headers: { 'User-Agent': DESKTOP_UA }
     });
     const t = String(r.data || '');
+    const infs = [...t.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
     res = {
       disc: (t.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
-      segments: (t.match(/#EXTINF/g) || []).length,
+      segments: infs.length,
+      duration: Math.round(infs.reduce((a, b) => a + b, 0)),
       multiAudio: (t.match(/#EXT-X-MEDIA:.*TYPE=AUDIO/g) || []).length
     };
   } catch (e) {

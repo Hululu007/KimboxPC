@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KimBoxPC 版</title>
   <script src="vendor/hls.min.js"></script>
+  <script src="vendor/mpegts.js"></script>
   <style>
     :root {
       --bg: #111418;
@@ -887,6 +888,10 @@
           <input type="checkbox" id="autoExtChk" onchange="saveAutoExt(this.checked)">
           问题源自动用外部播放器（默认关；该源封装有缺陷时自动交给 PotPlayer）
         </label>
+        <label class="audio-auto">
+          <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
+          兼容模式：服务端转封装（修复声音异常；拖动约需 2~3 秒）
+        </label>
 
 
 
@@ -1636,6 +1641,115 @@
       return card;
     }
 
+    /** 探测播放列表封装质量：记录时长、显示提示条、必要时建议换用外部播放器 */
+    function probeAndWarn(url, silent) {
+      if (!url || !url.includes('.m3u8')) return;
+      if (url === window.__probeWarnedUrl) return;
+      window.__probeWarnedUrl = url;
+
+      fetch(`/api/probe?url=${encodeURIComponent(url)}`)
+        .then(r => r.json())
+        .then(d => {
+          const disc = d && d.disc ? d.disc : 0;
+          if (d && d.duration) {
+            compat.duration = d.duration;
+            updateControls();
+          }
+          showSourceWarn(disc);
+          if (!disc || silent) return;
+          if (autoExtEnabled()) {
+            showToast(`该源有 ${disc} 处时间戳重置，已自动交给外部播放器`, 4000);
+            setTimeout(() => playWithExternalPlayer(), 600);
+          } else {
+            showToast(`该源有 ${disc} 处时间戳重置，网页播放可能声音异常；可开兼容模式或用外部播放器`, 6000);
+          }
+        })
+        .catch(() => {});
+    }
+
+    /* ==================== 兼容模式（服务端转封装） ==================== */
+    // 问题：部分源带 DISCONTINUITY，Chrome MSE 音频渲染会出错（变调/发闷）。
+    // 方案：/api/remux 用 ffmpeg -c copy 重排时间戳后以 MPEG-TS 供流，mpegts.js 播放。
+    // 拖动 = 以新位置重启 ffmpeg（约 2~3 秒）。
+
+    const compat = { on: false, player: null, url: '', base: 0, duration: 0 };
+
+    function compatEnabled() {
+      try { return localStorage.getItem('tvbox_compat') === '1'; } catch (e) { return false; }
+    }
+
+    async function toggleCompat(v) {
+      if (v) {
+        // 开启前确认服务端有 ffmpeg
+        try {
+          const st = await (await fetch('/api/remux/status')).json();
+          if (!st.available) {
+            showToast('未找到 ffmpeg，兼容模式不可用（请安装 ffmpeg 或放到 PATH）', 6000);
+            document.getElementById('compatChk').checked = false;
+            return;
+          }
+        } catch (e) {}
+      }
+      try { localStorage.setItem('tvbox_compat', v ? '1' : '0'); } catch (e) {}
+      // 切模式后重载当前集
+      if (currentDetail) reloadCurrentEpisode(true);
+    }
+
+    function destroyCompat() {
+      if (compat.player) {
+        try { compat.player.destroy(); } catch (e) {}
+        compat.player = null;
+      }
+      compat.on = false;
+    }
+
+    /** 用转封装流起播（startAt 为整片秒数） */
+    function playCompat(url, startAt) {
+      destroyCompat();
+      compat.on = true;
+      compat.url = url;
+      compat.base = Math.max(0, Math.floor(startAt || 0));
+
+      const src = `/api/remux?url=${encodeURIComponent(url)}&start=${compat.base}`;
+      showToast(`兼容模式：正在转封装（从 ${fmtTime(compat.base)} 开始）…`, 4000);
+
+      try {
+        const player = mpegts.createPlayer(
+          { type: 'mpegts', isLive: false, url: src },
+          {
+            enableWorker: false,
+            lazyLoad: false,
+            liveBufferLatencyChasing: false,
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 60,
+            autoCleanupMinBackwardDuration: 30
+          }
+        );
+        compat.player = player;
+        player.attachMediaElement(pvVideo);
+        player.on(mpegts.Events.ERROR, (t, d) => {
+          showToast('兼容模式播放出错：' + (d || t), 4000);
+        });
+        player.load();
+        player.play().catch(() => showToast('浏览器阻止了自动播放，点一下播放键即可'));
+      } catch (e) {
+        showToast('兼容模式启动失败: ' + e.message, 4000);
+        compat.on = false;
+      }
+    }
+
+    /** 兼容模式下的绝对播放位置 */
+    function compatPosition() {
+      return compat.base + (pvVideo.currentTime || 0);
+    }
+
+    /** 兼容模式下跳转：重启 ffmpeg */
+    function compatSeek(target) {
+      if (!compat.url) return;
+      showToast(`正在跳转到 ${fmtTime(target)}…`, 3000);
+      playCompat(compat.url, target);
+    }
+
     /* ==================== 同片源聚合（延迟排序） ==================== */
 
     let pendingEpIdx = null;
@@ -1924,7 +2038,7 @@
           epName: ep.title,
           epIndex: currentEpIdx,
           epUrl: ep.url,
-          position: isFinite(v.currentTime) ? v.currentTime : 0,
+          position: compat.on ? compatPosition() : (isFinite(v.currentTime) ? v.currentTime : 0),
           duration: isFinite(v.duration) ? v.duration : 0
         })
       }).catch(() => {});
@@ -2025,6 +2139,7 @@
       // 彻底重置媒体元素：只销毁 hls 实例时，video 上残留的 MediaSource
       // 会把旧的解码状态带到新流上，换源/切集后容易出现怪声
       try { video.pause(); } catch (e) {}
+      destroyCompat();
       if (hls) {
         try { hls.destroy(); } catch (e) {}
         hls = null;
@@ -2051,25 +2166,14 @@
         }
       }
 
-      // 探测该流的封装质量：有 DISCONTINUITY（时间戳重置）时提示一次
-      if (finalUrl.includes('.m3u8') && finalUrl !== window.__probeWarnedUrl) {
-        window.__probeWarnedUrl = finalUrl;
-        fetch(`/api/probe?url=${encodeURIComponent(finalUrl)}`)
-          .then(r => r.json())
-          .then(d => {
-            const disc = d && d.disc ? d.disc : 0;
-            showSourceWarn(disc);
-            if (disc > 0) {
-              if (autoExtEnabled()) {
-                showToast(`该源有 ${disc} 处时间戳重置，已自动交给外部播放器`, 4000);
-                setTimeout(() => playWithExternalPlayer(), 600);
-              } else {
-                showToast(`该源有 ${disc} 处时间戳重置，网页播放可能声音异常；可用外部播放器彻底避免`, 6000);
-              }
-            }
-          })
-          .catch(() => {});
+      // 兼容模式：改走服务端转封装，彻底规避时间戳重置导致的音频异常
+      if (compatEnabled() && finalUrl.includes('.m3u8')) {
+        playCompat(finalUrl, resumeAt || 0);
+        probeAndWarn(finalUrl, true);
+        return;
       }
+      destroyCompat();
+      probeAndWarn(finalUrl, false);
 
       const seek = () => {
         if (resumeAt > 1) {
@@ -2184,6 +2288,7 @@
 
     function closePlayer() {
       saveHistory(true);
+      destroyCompat();
       const video = document.getElementById('h5Player');
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       video.pause();
@@ -2326,6 +2431,7 @@
      */
     function seekTo(target) {
       if (!isFinite(target) || target < 0) return;
+      if (compat.on) { compatSeek(target); return; }
       const wasPlaying = !pvVideo.paused;
 
       if (wasPlaying) pvVideo.pause();
@@ -2378,6 +2484,8 @@
       if (chk) chk.checked = autoReloadEnabled();
       const ext = document.getElementById('autoExtChk');
       if (ext) ext.checked = autoExtEnabled();
+      const cp = document.getElementById('compatChk');
+      if (cp) cp.checked = compatEnabled();
     }
 
     /** 问题源是否自动交给外部播放器 */
@@ -2473,21 +2581,26 @@
     );
 
     function updateControls() {
-      const dur = isFinite(pvVideo.duration) ? pvVideo.duration : 0;
+      const dur = compat.on
+        ? (compat.duration || 0)
+        : (isFinite(pvVideo.duration) ? pvVideo.duration : 0);
+      const pos = compat.on ? compatPosition() : pvVideo.currentTime;
 
       if (!isSeekDragging() && !seeking) {
-        const durLabel = !isFinite(dur) ? (dur === Infinity ? '直播' : '--:--') : fmtTime(dur);
-        document.getElementById('ctrlTime').textContent =
-          `${fmtTime(pvVideo.currentTime)} / ${durLabel}`;
-        paintSlider('seekFill', 'seekThumb', dur > 0 ? pvVideo.currentTime / dur : 0);
+        const durLabel = compat.on
+          ? (dur > 0 ? fmtTime(dur) : '--:--')
+          : (!isFinite(dur) ? (dur === Infinity ? '直播' : '--:--') : fmtTime(dur));
+        document.getElementById('ctrlTime').textContent = `${fmtTime(pos)} / ${durLabel}`;
+        paintSlider('seekFill', 'seekThumb', dur > 0 ? pos / dur : 0);
       }
 
       // 缓冲进度
       try {
         if (dur > 0 && pvVideo.buffered && pvVideo.buffered.length) {
           const end = pvVideo.buffered.end(pvVideo.buffered.length - 1);
+          const absEnd = compat.on ? compat.base + end : end;
           document.getElementById('seekBuffer').style.width =
-            Math.min(100, (end / dur) * 100) + '%';
+            Math.min(100, (absEnd / dur) * 100) + '%';
         }
       } catch (e) {}
 
