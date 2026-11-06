@@ -27,14 +27,20 @@
       flex-direction: column;
     }
 
+    /* 顶部固定区（顶栏 + 分类栏 + 列表工具栏一起吸顶） */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    }
+
     /* 顶部导航 */
     header {
       background: rgba(17, 20, 24, 0.95);
       backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 100;
       padding: 12px 24px;
       display: flex;
       align-items: center;
@@ -671,7 +677,8 @@
 </head>
 <body>
 
-  <!-- 顶部栏 -->
+  <!-- 顶部固定区：顶栏 + 分类栏 + 列表工具栏 -->
+  <div class="topbar" id="topbar">
   <header>
     <div class="logo">📺 TVBox PC</div>
 
@@ -713,6 +720,7 @@
     <span class="grow"></span>
     <button class="ghost-btn" onclick="clearCurrentList()">🗑 清空全部</button>
   </div>
+  </div><!-- /topbar -->
 
   <!-- 配置源管理面板 -->
   <div class="cfg-mask" id="cfgMask" onclick="if(event.target===this) closeConfigManager()">
