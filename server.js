@@ -8,7 +8,7 @@ const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const PlayerLauncher = require('./playerLauncher');
 const Mpv = require('./mpvController');
-const { ConfigRepo, HistoryRepo, EpisodeRepo, FavoriteRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
+const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
 
 const app = express();
 // 监听地址（是否允许局域网访问）：环境变量 HOST > host.txt > 127.0.0.1
@@ -300,8 +300,7 @@ app.get('/api/detail', async (req, res) => {
 
     // 附带该片在本机的播放历史，用于续播
     detail.history = HistoryRepo.get(siteKey, String(req.query.id)) || null;
-    // 分集进度：每集各自的播放位置
-    try { detail.episodeProgress = EpisodeRepo.map(siteKey, String(req.query.id)); } catch (e) { detail.episodeProgress = {}; }
+
     detail.siteKey = siteKey;
     detail.favorited = FavoriteRepo.has(siteKey, String(req.query.id));
     res.json(detail);
@@ -723,26 +722,10 @@ app.post('/api/history', (req, res) => {
   const b = req.body || {};
   if (!b.siteKey || !b.vodId) return res.status(400).json({ error: '缺少 siteKey / vodId' });
   HistoryRepo.save(b);
-  // 分集进度：每集单独记一条
-  try {
-    EpisodeRepo.save({
-      siteKey: b.siteKey,
-      vodId: b.vodId,
-      epIndex: b.epIndex,
-      position: b.position,
-      duration: b.duration
-    });
-  } catch (e) {}
+
   res.json({ success: true });
 });
 
-// 某部片的全部分集进度
-app.get('/api/episode-progress', (req, res) => {
-  const siteKey = String(req.query.siteKey || '');
-  const vodId = String(req.query.vodId || '');
-  if (!siteKey || !vodId) return res.status(400).json({ error: '缺少 siteKey / vodId' });
-  res.json({ map: EpisodeRepo.map(siteKey, vodId) });
-});
 
 app.delete('/api/history', (req, res) => {
   const bak = backup('before-clear-history');
