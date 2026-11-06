@@ -13,6 +13,25 @@
 
 ---
 
+## 两种启动方式
+
+| 入口 | 界面 | 播放内核 | 适合 |
+|---|---|---|---|
+| `start.bat` | 系统浏览器（可局域网访问） | Chrome MSE / 兼容模式 / 外部播放器 | 平时使用、多设备访问 |
+| `KimBoxPC-桌面版.bat` | Electron 独立窗口 | **libmpv 原生渲染**（画面嵌在应用内） | 追剧，声音最稳 |
+
+### 桌面版（Electron + libmpv）
+
+- 画面由 libmpv 解码后经内存缓冲送到页面 `<canvas>`，**不是独立播放器窗口**
+- 音频由 libmpv 直接输出，**完全绕开浏览器 MSE**，不会出现变调/发闷
+- 依赖：`node_modules/electron`、`native/lib/libmpv-2.dll`、`native/build/Release/mpv_native.node`
+- 重新编译原生模块（Electron 升级后需要）：
+
+```bat
+npm run build:native
+```
+
+- 启动器会在原生模块缺失时自动尝试编译；编译需要 Visual Studio C++ 生成工具与 Python
 ## 🎯 核心特性
 
 - **多配置源**：可保存任意多个 TVBox / FongMi 配置地址，随时切换；启动时自动恢复上次使用的源。
