@@ -1970,16 +1970,26 @@
           hls = new Hls({
             maxBufferLength: 30,
             maxMaxBufferLength: 60,
-            backBufferLength: 30,   // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
-            enableWorker: true
+            backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
+            enableWorker: true,
+            maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
+            enableCEA708Captions: false,
+            manifestLoadingTimeOut: 15000,
+            fragLoadingTimeOut: 20000
           });
           hls.loadSource(finalUrl);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             document.getElementById('pvToast').classList.remove('show');
+            // 多音轨流固定用第一条，避免播放中途自动切换造成突变
+            try {
+              if (hls.audioTracks && hls.audioTracks.length > 1) hls.audioTrack = 0;
+            } catch (e) {}
             seek();
             video.play().catch(() => showToast('浏览器阻止了自动播放，点一下播放键即可'));
           });
+          // 音轨被切换时记录一下，便于定位
+          hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => { armAudioWatch(); });
           hls.on(Hls.Events.ERROR, (evt, data) => {
             if (data.fatal) {
               if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -2226,15 +2236,64 @@
     }
 
     // 重载当前集（音频异常时的逃生口）
-    function reloadCurrentEpisode() {
+    function reloadCurrentEpisode(silent = false) {
       if (!currentDetail) return;
       const source = currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
       const ep = source && source.episodes && source.episodes[currentEpIdx];
       if (!ep) return;
       const at = isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0;
-      showToast('正在重载当前集…', 2500);
+      if (!silent) showToast('正在重载当前集…', 2500);
       playEpisode(ep.url, at);
     }
+
+    /* ==================== 音频看门狗 ==================== */
+    // 现象：播放一段时间后声音突然异常，点重载就恢复，说明媒体元素进了坏状态。
+    // 用「音频解码字节数是否还在增长」来判断，卡住就自动重载（保持播放位置）。
+    let audioWatchTimer = null;
+    let lastAudioBytes = -1;
+    let audioStallCount = 0;
+    let lastAutoRecover = 0;
+
+    function armAudioWatch() {
+      lastAudioBytes = -1;
+      audioStallCount = 0;
+    }
+
+    function startAudioWatch() {
+      if (audioWatchTimer) return;
+      audioWatchTimer = setInterval(() => {
+        const view = document.getElementById('playerView');
+        if (!view || !view.classList.contains('active')) return;
+
+        const v = pvVideo;
+        if (!v || v.paused || v.seeking || v.ended || v.readyState < 3) { armAudioWatch(); return; }
+        if (v.muted || v.volume === 0) { armAudioWatch(); return; }   // 静音时不判断
+
+        const bytes = v.webkitAudioDecodedByteCount || v.mozAudioDecodedByteCount || 0;
+        if (!bytes) return;                                            // 浏览器不支持该指标
+
+        window.__audioDebug = { bytes, stalls: audioStallCount, recovers: window.__autoRecoverCount || 0 };
+
+        if (bytes === lastAudioBytes) {
+          audioStallCount++;
+          if (audioStallCount >= 3) {                                  // 约 9 秒没有新音频数据
+            const now = Date.now();
+            audioStallCount = 0;
+            if (now - lastAutoRecover > 30000) {                       // 30 秒内只自动恢复一次，避免抖动
+              lastAutoRecover = now;
+              window.__autoRecoverCount = (window.__autoRecoverCount || 0) + 1;
+              showToast('检测到音频异常，正在自动重载…', 3000);
+              reloadCurrentEpisode(true);
+            }
+          }
+        } else {
+          lastAudioBytes = bytes;
+          audioStallCount = 0;
+        }
+      }, 3000);
+    }
+
+    startAudioWatch();
 
     attachSlider(
       document.getElementById('volBar'),
