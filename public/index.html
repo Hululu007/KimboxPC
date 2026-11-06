@@ -987,18 +987,20 @@
         <button class="pv-toggle" id="pvToggleBtn" onclick="togglePanel()">展开 ▾</button>
       </div>
       <div class="pv-panel-body">
-        <label class="audio-auto">
-          <input type="checkbox" id="autoReloadChk" onchange="saveAutoReload(this.checked)">
-          音频异常时自动重载（默认关；开启后约中断 1~2 秒）
-        </label>
-        <label class="audio-auto">
-          <input type="checkbox" id="autoExtChk" onchange="saveAutoExt(this.checked)">
-          问题源自动用外部播放器（默认关；该源封装有缺陷时自动交给 PotPlayer）
-        </label>
-        <label class="audio-auto">
-          <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
-          兼容模式：服务端转封装（修复声音异常；拖动约需 2~3 秒）
-        </label>
+        <div id="compatOptions">
+          <label class="audio-auto">
+            <input type="checkbox" id="autoReloadChk" onchange="saveAutoReload(this.checked)">
+            音频异常时自动重载（默认关；开启后约中断 1~2 秒）
+          </label>
+          <label class="audio-auto">
+            <input type="checkbox" id="autoExtChk" onchange="saveAutoExt(this.checked)">
+            问题源自动用外部播放器（默认关；该源封装有缺陷时自动交给 PotPlayer）
+          </label>
+          <label class="audio-auto">
+            <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
+            兼容模式：服务端转封装（修复声音异常；拖动约需 2~3 秒）
+          </label>
+        </div>
 
 
 
@@ -1832,6 +1834,9 @@
         sel.value = mpv ? 'mpv' : 'browser';
         sel.classList.toggle('mpv', mpv);
       }
+      const compatBox = document.getElementById('compatOptions');
+      if (compatBox) compatBox.style.display = mpv ? 'none' : 'block';
+
       document.querySelectorAll('#engineBtns .source-tab').forEach(el => {
         el.classList.toggle('active', el.dataset.engine === (mpv ? 'mpv' : 'browser'));
       });
@@ -2222,7 +2227,7 @@
 
           const n2 = document.createElement('span');
           n2.className = 'src-meta ' + cls;
-          const warn = (item.disc && item.disc > 0) ? ` · ⚠${item.disc}` : '';
+          const warn = (!isMpv() && item.disc && item.disc > 0) ? ` · ⚠${item.disc}` : '';
           n2.textContent = `${ms}ms · ${item.lines.length} 线路${warn}`;
 
           chip.appendChild(n1);
