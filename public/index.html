@@ -74,6 +74,10 @@
       user-select: all;
     }
 
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px !important; }
+    .icon-btn.spinning { animation: spin 0.6s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
     .header-spacer { flex: 1 1 auto; }
 
     .config-box, .search-box {
@@ -848,11 +852,12 @@
     <!-- 搜索 -->
     <div class="search-box">
       <select id="searchScope" class="ctrl-rate" onchange="saveScope(this.value)" title="搜索范围">
+        <option value="all" selected>全站</option>
         <option value="site">本站</option>
-        <option value="all">全站</option>
       </select>
       <input type="text" id="searchInput" placeholder="搜索影片..." onkeyup="if(event.key==='Enter') doSearch()">
       <button class="secondary" onclick="doSearch()">搜索</button>
+      <button class="secondary icon-btn" id="btnHomeRefresh" onclick="reloadHome()" title="重新加载主页"></button>
     </div>
 
     <div class="header-spacer"></div>
@@ -1457,6 +1462,24 @@
       });
       activeSiteKey = siteKey;
       loadHome();
+    }
+
+    /** 服务端没有主页缓存时保留占位，便于以后加缓存 */
+    function clearHomeCache() {}
+
+    /** 重新加载主页（重新拉取推荐/分类/列表） */
+    async function reloadHome() {
+      const btn = document.getElementById('btnHomeRefresh');
+      if (btn) btn.classList.add('spinning');
+      try {
+        clearHomeCache();
+        await loadHome();
+        showToast('主页已刷新', 1500);
+      } catch (e) {
+        showToast('刷新失败：' + e.message, 3000);
+      } finally {
+        setTimeout(() => { if (btn) btn.classList.remove('spinning'); }, 600);
+      }
     }
 
     async function loadHome() {
@@ -3240,6 +3263,7 @@
 
     document.getElementById('btnFull').innerHTML = ICON.full;
     document.getElementById('btnReload').innerHTML = ICON.reload;
+    document.getElementById('btnHomeRefresh').innerHTML = ICON.reload;
     document.getElementById('btnPrevEp').innerHTML = ICON.prev;
     document.getElementById('btnNextEp').innerHTML = ICON.next;
     document.getElementById('btnBack30').innerHTML = ICON.back30;
