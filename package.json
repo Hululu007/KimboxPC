@@ -1,10 +1,12 @@
 {
   "name": "kimboxpc",
-  "version": "2.1.1",
+  "version": "3.0.0",
   "description": "KimBoxPC - 基于 TVBox / FongMi 协议的 Windows PC 播放客户端",
-  "main": "server.js",
+  "main": "electron/main.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "app": "electron .",
+    "build:native": "node-gyp rebuild --directory=native --target=45.2.3 --dist-url=https://electronjs.org/headers --arch=x64"
   },
   "keywords": [
     "tvbox",
@@ -21,5 +23,8 @@
     "axios": "^1.16.1",
     "cors": "^2.8.6",
     "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3"
   }
 }

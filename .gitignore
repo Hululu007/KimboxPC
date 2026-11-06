@@ -28,3 +28,5 @@ _boot.log
 .DS_Store
 Thumbs.db
 desktop.ini
+native/lib/
+native/build/

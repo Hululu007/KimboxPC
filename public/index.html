@@ -764,6 +764,18 @@
     .play-overlay .po-text { font-size: 13px; color: #e6edf3; }
 
     /* mpv 内核模式：画面在独立窗口，这里只做状态展示与控制 */
+    #mpvCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      display: none;
+      z-index: 3;
+    }
+    #mpvCanvas.show { display: block; }
+
     .mpv-stage {
       position: absolute;
       inset: 0;
@@ -895,6 +907,7 @@
 
     <div class="pv-stage" id="pvStage">
       <video id="h5Player" playsinline></video>
+      <canvas id="mpvCanvas"></canvas>
       <div class="pv-toast" id="pvToast"></div>
       <div class="mpv-stage" id="mpvStage">
         <div class="mpv-icon">🎬</div>
@@ -1512,6 +1525,15 @@
     window.addEventListener('resize', () => {
       clearTimeout(tabResizeTimer);
       tabResizeTimer = setTimeout(fitTabs, 150);
+
+      // Electron + mpv：窗口尺寸变化后重建渲染分辨率
+      if (isMpv() && isNativeShell() && document.getElementById('playerView').classList.contains('active')) {
+        clearTimeout(window.__mpvResizeTimer);
+        window.__mpvResizeTimer = setTimeout(() => {
+          const { w, h } = calcRenderSize();
+          window.kimbox.resize(w, h).catch(() => {});
+        }, 400);
+      }
     });
 
     // 列表分页状态
@@ -1769,7 +1791,9 @@
     function syncEngineUI() {
       const mpv = isMpv();
       const stage = document.getElementById('mpvStage');
-      if (stage) stage.classList.toggle('show', mpv);
+      if (stage) stage.classList.toggle('show', mpv && !isNativeShell());
+      const canvas = document.getElementById('mpvCanvas');
+      if (canvas) canvas.classList.toggle('show', mpv && isNativeShell());
 
       const sel = document.getElementById('engineSel');
       if (sel) {
@@ -1796,6 +1820,51 @@
       }, 800);
     }
 
+    /** 是否跑在 Electron 壳里（可用 libmpv 原生渲染） */
+    function isNativeShell() {
+      return !!(window.kimbox && window.kimbox.isElectron);
+    }
+
+    /** 按舞台尺寸算渲染分辨率（保持比例，上限 1600x900） */
+    function calcRenderSize() {
+      const stage = document.getElementById('pvStage');
+      const r = stage ? stage.getBoundingClientRect() : { width: 1280, height: 720 };
+      let w = Math.max(480, Math.floor(r.width));
+      let h = Math.max(270, Math.floor(r.height));
+      const maxW = 1600, maxH = 900;
+      const k = Math.min(1, maxW / w, maxH / h);
+      w = Math.round(w * k); h = Math.round(h * k);
+      // 偶数尺寸，避免解码器对齐问题
+      w -= w % 2; h -= h % 2;
+      return { w, h };
+    }
+
+    let frameUnsub = null;
+    let frameCanvasCtx = null;
+    let frameImg = null;
+
+    function bindMpvFrames() {
+      if (frameUnsub) { try { frameUnsub(); } catch (e) {} frameUnsub = null; }
+      const canvas = document.getElementById('mpvCanvas');
+      if (!canvas) return;
+      frameCanvasCtx = canvas.getContext('2d', { alpha: false });
+      frameUnsub = window.kimbox.onFrame(({ data, width, height }) => {
+        if (!frameCanvasCtx) return;
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width; canvas.height = height;
+          frameImg = null;
+        }
+        // mpv 输出 rgb0（A=0），这里把 alpha 补成 255
+        const u32 = new Uint32Array(data.buffer, data.byteOffset, width * height);
+        for (let i = 0; i < u32.length; i++) u32[i] |= 0xff000000;
+        if (!frameImg || frameImg.width !== width) {
+          frameImg = frameCanvasCtx.createImageData(width, height);
+        }
+        frameImg.data.set(new Uint8ClampedArray(data.buffer, data.byteOffset, width * height * 4));
+        frameCanvasCtx.putImageData(frameImg, 0, 0);
+      });
+    }
+
     async function openMpv(url, startAt = 0) {
       destroyCompat();
       if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
@@ -1803,12 +1872,32 @@
       try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
 
       syncEngineUI();
+      clearTimeout(window.__mpvResizeTimer);
       const title = currentDetail
         ? `${currentDetail.vod_name} - ${(currentDetail.playSources[currentSourceIdx] || {}).episodes?.[currentEpIdx]?.title || ''}`
         : 'KimBoxPC';
+
+      if (isNativeShell()) {
+        const { w, h } = calcRenderSize();
+        const canvas = document.getElementById('mpvCanvas');
+        if (canvas) canvas.classList.add('show');
+        document.getElementById('mpvStage').classList.remove('show');
+        bindMpvFrames();
+
+        const d = await window.kimbox.open({
+          url, title, start: Math.max(0, Math.floor(startAt || 0)), width: w, height: h
+        });
+        if (d && d.error) {
+          showToast('mpv 启动失败：' + d.error, 5000);
+          return;
+        }
+        startMpvPolling();
+        return;
+      }
+
+      // 非 Electron：退回独立 mpv 窗口
       const t = document.getElementById('mpvStageTitle');
       if (t) t.textContent = '正在启动 mpv…';
-
       try {
         const r = await fetch('/api/mpv/open', {
           method: 'POST',
@@ -1830,7 +1919,7 @@
       mpvTimer = setInterval(async () => {
         if (!document.getElementById('playerView').classList.contains('active')) return;
         try {
-          const s = await (await fetch('/api/mpv/state')).json();
+          const s = isNativeShell() ? await window.kimbox.state() : await (await fetch('/api/mpv/state')).json();
           if (!s) return;
           mpvState.running = !!s.running;
           mpvState.paused = !!s.paused;
@@ -1848,6 +1937,7 @@
 
     async function mpvCmd(name, args) {
       try {
+        if (isNativeShell()) { await window.kimbox.cmd(name, args); return; }
         await fetch('/api/mpv/cmd', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2517,7 +2607,11 @@
     function closePlayer() {
       saveHistory(true);
       destroyCompat();
-      if (isMpv()) { stopMpvPolling(); fetch('/api/mpv/stop', { method: 'POST' }).catch(() => {}); }
+      if (isMpv()) {
+        stopMpvPolling();
+        if (isNativeShell()) { if (frameUnsub) { try { frameUnsub(); } catch (e) {} frameUnsub = null; } window.kimbox.stop().catch(() => {}); }
+        else fetch('/api/mpv/stop', { method: 'POST' }).catch(() => {});
+      }
       const video = document.getElementById('h5Player');
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       video.pause();
@@ -2740,7 +2834,7 @@
       const box = document.getElementById('srcWarn');
       const txt = document.getElementById('srcWarnText');
       if (!box || !txt) return;
-      if (!disc || disc <= 0) { box.style.display = 'none'; return; }
+      if (!disc || disc <= 0 || isMpv()) { box.style.display = 'none'; return; }
       txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
       box.style.display = 'flex';
     }
