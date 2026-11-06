@@ -16,6 +16,15 @@ contextBridge.exposeInMainWorld('kimbox', {
   stop: () => ipcRenderer.invoke('mpv:stop'),
   resize: (width, height) => ipcRenderer.invoke('mpv:resize', { width, height }),
 
+  // 全屏
+  setFullscreen: (on) => ipcRenderer.invoke('shell:fullscreen', { on }),
+  isFullscreen: () => ipcRenderer.invoke('shell:isfullscreen'),
+
+  // 字幕 / 音轨
+  tracks: () => ipcRenderer.invoke('mpv:tracks'),
+  setTrack: (kind, id) => ipcRenderer.invoke('mpv:setTrack', { kind, id }),
+  pickSubtitle: () => ipcRenderer.invoke('mpv:pickSubtitle'),
+
   // 视频帧订阅（回调收到 { data: Buffer, width, height }）
   onFrame: (cb) => {
     const handler = (_e, payload) => cb(payload);

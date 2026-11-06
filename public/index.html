@@ -424,6 +424,25 @@
     }
     .audio-auto input { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; }
 
+    .track-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 4px 0 2px;
+      flex-wrap: wrap;
+    }
+    .track-row select {
+      min-width: 150px;
+      max-width: 260px;
+      padding: 6px 8px;
+      font-size: 12px;
+      border-radius: 7px;
+      background: #171b21;
+      color: #e6edf3;
+      border: 1px solid #2a3038;
+    }
+    .track-row button { padding: 5px 10px; font-size: 12px; }
+
     .src-warn-bar {
       flex: 0 0 auto;
       display: flex;
@@ -447,7 +466,13 @@
 
     /* 全屏：隐藏顶栏与选集面板，控制条浮在画面底部并自动隐藏 */
     .player-view:fullscreen .pv-top,
-    .player-view:fullscreen .pv-panel { display: none; }
+    .player-view:fullscreen .pv-panel { display: none; }    /* 桌面版原生全屏 */
+    .player-view.native-fs { position: fixed; inset: 0; z-index: 9999; }
+    .player-view.native-fs .pv-top,
+    .player-view.native-fs .pv-panel { display: none; }
+    .player-view.native-fs .pv-stage { flex: 1 1 auto; height: auto; }
+    .player-view.native-fs #mpvCanvas { object-fit: contain; }
+
     .player-view:fullscreen .pv-controls {
       position: absolute;
       left: 0; right: 0; bottom: 0;
@@ -981,6 +1006,13 @@
         <div class="source-tabs" id="engineBtns">
           <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">浏览器（内置）</div>
           <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（推荐）</div>
+        </div>
+
+        <div class="row-label" id="trackRowLabel" style="display:none;">字幕 / 音轨（mpv 模式）：</div>
+        <div class="track-row" id="trackRow" style="display:none;">
+          <select id="subSel" onchange="changeSubTrack(this.value)" title="字幕"></select>
+          <select id="audioSel" onchange="changeAudioTrack(this.value)" title="音轨"></select>
+          <button class="ghost-btn" onclick="pickSubtitleFile()">＋ 外挂字幕</button>
         </div>
 
         <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
@@ -1805,6 +1837,93 @@
       });
     }
 
+    /* ---------- 字幕 / 音轨 ---------- */
+    async function refreshTracks() {
+      const row = document.getElementById('trackRow');
+      const label = document.getElementById('trackRowLabel');
+      if (!row || !label) return;
+
+      const usable = isMpv() && isNativeShell();
+      row.style.display = usable ? 'flex' : 'none';
+      label.style.display = usable ? 'block' : 'none';
+      if (!usable) return;
+
+      let data = { list: [] };
+      try { data = await window.kimbox.tracks(); } catch (e) {}
+      const list = data.list || [];
+
+      const subs = list.filter(t => t.type === 'sub');
+      const auds = list.filter(t => t.type === 'audio');
+
+      const subSel = document.getElementById('subSel');
+      const audSel = document.getElementById('audioSel');
+
+      subSel.innerHTML = '<option value="no">关闭字幕</option>' +
+        subs.map(t => `<option value="${t.id}">${escapeHtml(t.title || t.lang || ('字幕 ' + t.id))}${t.external ? '（外挂）' : ''}</option>`).join('');
+      if (String(data.sid) === 'no' || data.sid === false || subs.length === 0) subSel.value = 'no';
+      else if (subs.some(s => String(s.id) === String(data.sid))) subSel.value = String(data.sid);
+
+      audSel.innerHTML = auds.length
+        ? auds.map(t => `<option value="${t.id}">${escapeHtml(t.title || t.lang || ('音轨 ' + t.id))}${t.external ? '（外挂）' : ''}</option>`).join('')
+        : '<option value="">（无音轨）</option>';
+      if (auds.some(a => String(a.id) === String(data.aid))) audSel.value = String(data.aid);
+    }
+
+    async function changeSubTrack(v) {
+      if (!isNativeShell()) return;
+      await window.kimbox.setTrack('sub', v === 'no' ? 'no' : Number(v));
+      showToast(v === 'no' ? '已关闭字幕' : '已切换字幕', 1800);
+    }
+
+    async function changeAudioTrack(v) {
+      if (!isNativeShell() || !v) return;
+      await window.kimbox.setTrack('audio', Number(v));
+      showToast('已切换音轨', 1800);
+    }
+
+    async function pickSubtitleFile() {
+      if (!isNativeShell()) return;
+      const r = await window.kimbox.pickSubtitle();
+      if (r && r.error) return showToast('加载字幕失败：' + r.error, 4000);
+      if (r && r.canceled) return;
+      showToast('外挂字幕已加载', 2000);
+      setTimeout(refreshTracks, 600);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    /* ---------- 桌面版全屏 ---------- */
+    let nativeFullscreen = false;
+
+    async function toggleNativeFullscreen() {
+      try {
+        nativeFullscreen = !nativeFullscreen;
+        const r = await window.kimbox.setFullscreen(nativeFullscreen);
+        if (r && r.error) { showToast('全屏切换失败：' + r.error, 3000); return; }
+        document.getElementById('playerView').classList.toggle('native-fs', nativeFullscreen);
+        document.body.classList.toggle('native-fs', nativeFullscreen);
+        // 全屏后舞台尺寸变了，重建渲染分辨率
+        setTimeout(() => {
+          if (!isMpv() || !isNativeShell()) return;
+          const { w, h } = calcRenderSize();
+          window.kimbox.resize(w, h).catch(() => {});
+        }, 350);
+        showToast(nativeFullscreen ? '已全屏（按 Esc 退出）' : '已退出全屏', 1800);
+      } catch (e) {
+        showToast('全屏切换失败：' + e.message, 3000);
+      }
+    }
+
+    // Esc 退出全屏
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && nativeFullscreen && isNativeShell()) {
+        nativeFullscreen = true;
+        toggleNativeFullscreen();
+      }
+    });
+
     function focusMpvWindow() {
       fetch('/api/mpv/cmd', {
         method: 'POST',
@@ -1892,6 +2011,8 @@
           return;
         }
         startMpvPolling();
+        setTimeout(refreshTracks, 3000);
+        setTimeout(refreshTracks, 8000);
         return;
       }
 
@@ -2997,6 +3118,7 @@
     pvVideo.addEventListener('dblclick', () => toggleFullscreen());
 
     function toggleFullscreen() {
+      if (isMpv() && isNativeShell()) { toggleNativeFullscreen(); return; }
       if (isMpv()) { mpvCmd('cycle', ['fullscreen']); return; }
       const view = document.getElementById('playerView');
       if (document.fullscreenElement) {

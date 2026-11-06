@@ -271,6 +271,28 @@ static napi_value NapiRender(napi_env env, napi_callback_info info) {
   return out;
 }
 
+/* ---------- resize(inst, width, height)：只换缓冲，不重建上下文 ---------- */
+static napi_value NapiResize(napi_env env, napi_callback_info info) {
+  size_t argc = 3;
+  napi_value argv[3];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  Instance *inst = get_instance(env, argv[0]);
+  if (!inst) return throw_err(env, "无效实例");
+
+  int32_t w = inst->w, h = inst->h;
+  napi_get_value_int32(env, argv[1], &w);
+  napi_get_value_int32(env, argv[2], &h);
+  if (w <= 0 || h <= 0) return throw_err(env, "尺寸无效");
+
+  if (inst->buf) { free(inst->buf); inst->buf = NULL; }
+  inst->w = w; inst->h = h; inst->stride = w * 4;
+  inst->buf = (unsigned char *)calloc((size_t)inst->stride * h, 1);
+  if (!inst->buf) return throw_err(env, "内存分配失败");
+
+  napi_value out; napi_create_int32(env, 1, &out);
+  return out;
+}
+
 /* ---------- command(inst, [args]) ---------- */
 static napi_value NapiCommand(napi_env env, napi_callback_info info) {
   size_t argc = 2;
@@ -388,6 +410,7 @@ static napi_value ModuleInit(napi_env env, napi_value exports) {
   EXPORT("init", NapiInit)
   EXPORT("create", NapiCreate)
   EXPORT("initRender", NapiInitRender)
+  EXPORT("resize", NapiResize)
   EXPORT("render", NapiRender)
   EXPORT("update", NapiUpdate)
   EXPORT("command", NapiCommand)

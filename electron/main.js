@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -71,6 +71,63 @@ function createMainWindow() {
     app.quit();
   });
 }
+
+/* ---------- 全屏 ---------- */
+ipcMain.handle('shell:fullscreen', (evt, { on }) => {
+  if (!mainWin || mainWin.isDestroyed()) return { error: '窗口不可用' };
+  mainWin.setFullScreen(!!on);
+  return { fullscreen: mainWin.isFullScreen() };
+});
+
+ipcMain.handle('shell:isfullscreen', () => {
+  return { fullscreen: !!(mainWin && !mainWin.isDestroyed() && mainWin.isFullScreen()) };
+});
+
+/* ---------- 字幕 / 音轨 ---------- */
+ipcMain.handle('mpv:tracks', () => {
+  if (!inst || !native) return { list: [], sid: null, aid: null };
+  const g = (n) => { try { return native.getProp(inst, n); } catch (e) { return null; } };
+  const count = Number(g('track-list/count') || 0);
+  const list = [];
+  for (let i = 0; i < count; i++) {
+    list.push({
+      type: g(`track-list/${i}/type`) || '',
+      id: Number(g(`track-list/${i}/id`)),
+      title: g(`track-list/${i}/title`) || '',
+      lang: g(`track-list/${i}/lang`) || '',
+      codec: g(`track-list/${i}/codec`) || '',
+      external: String(g(`track-list/${i}/external`)) === 'yes' || g(`track-list/${i}/external`) === true
+    });
+  }
+  return { list, sid: g('sid'), aid: g('aid') };
+});
+
+ipcMain.handle('mpv:setTrack', (evt, { kind, id }) => {
+  try {
+    if (!inst || !native) return { error: 'mpv 未启动' };
+    const prop = kind === 'sub' ? 'sid' : 'aid';
+    native.setProp(inst, prop, (id === 'no' || id === 0 || id === '0') ? 'no' : Number(id));
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+ipcMain.handle('mpv:pickSubtitle', async () => {
+  try {
+    if (!inst || !native) return { error: 'mpv 未启动' };
+    const r = await dialog.showOpenDialog(mainWin, {
+      title: '选择字幕文件',
+      properties: ['openFile'],
+      filters: [{ name: '字幕', extensions: ['srt', 'ass', 'ssa', 'vtt', 'sub'] }]
+    });
+    if (r.canceled || !r.filePaths.length) return { canceled: true };
+    native.command(inst, ['sub-add', r.filePaths[0], 'select']);
+    return { path: r.filePaths[0] };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
 
 /* ---------- 播放控制 ---------- */
 function stopRenderLoop() {
@@ -212,7 +269,9 @@ ipcMain.handle('mpv:resize', (evt, { width, height }) => {
     if (w === renderW && h === renderH) return { ok: true };
     renderW = w; renderH = h;
     if (inst && native) {
-      native.initRender(inst, renderW, renderH);   // 重建上下文，保持播放位置
+      // SW 渲染的尺寸是每帧参数，只需换缓冲，不能重建上下文（会拆掉视频管线）
+      if (native.resize) native.resize(inst, renderW, renderH);
+      else native.initRender(inst, renderW, renderH);
     }
     return { ok: true, render: `${renderW}x${renderH}` };
   } catch (e) {
