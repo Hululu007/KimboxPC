@@ -368,6 +368,9 @@
     .pv-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
     .pv-spacer { flex: 1 1 auto; }
     .pv-top button { padding: 7px 14px; }
+    .engine-label { font-size: 12px; color: var(--text-muted); margin-left: 4px; }
+    .engine-sel { min-width: 86px; }
+    .engine-sel.mpv { border-color: var(--accent); color: #fff; font-weight: 600; }
     .fav-btn.faved { background: #4a3a10; color: #ffce3a; }
 
     /* 选集面板：位于控制条下方，可折叠 */
@@ -879,9 +882,10 @@
         <div class="pv-sub" id="mMeta"></div>
       </div>
       <div class="pv-spacer"></div>
-      <select class="ctrl-rate" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
+      <span class="engine-label">引擎</span>
+      <select class="ctrl-rate engine-sel" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
         <option value="browser">浏览器</option>
-        <option value="mpv">mpv 内核</option>
+        <option value="mpv">mpv</option>
       </select>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
       <button class="secondary" onclick="toggleFullscreen()">⛶ 全屏 (F)</button>
@@ -959,6 +963,12 @@
         </label>
 
 
+
+        <div class="row-label">播放引擎（mpv 内核解码更稳，拖动即时）：</div>
+        <div class="source-tabs" id="engineBtns">
+          <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">浏览器（内置）</div>
+          <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（推荐）</div>
+        </div>
 
         <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
         <div class="source-tabs" id="mAllSources"><span class="src-loading">正在聚合各站点同片源…</span></div>
@@ -1757,8 +1767,18 @@
     }
 
     function syncEngineUI() {
+      const mpv = isMpv();
       const stage = document.getElementById('mpvStage');
-      if (stage) stage.classList.toggle('show', isMpv());
+      if (stage) stage.classList.toggle('show', mpv);
+
+      const sel = document.getElementById('engineSel');
+      if (sel) {
+        sel.value = mpv ? 'mpv' : 'browser';
+        sel.classList.toggle('mpv', mpv);
+      }
+      document.querySelectorAll('#engineBtns .source-tab').forEach(el => {
+        el.classList.toggle('active', el.dataset.engine === (mpv ? 'mpv' : 'browser'));
+      });
     }
 
     function focusMpvWindow() {
