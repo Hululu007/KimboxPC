@@ -728,6 +728,37 @@
       z-index: 5;
     }
     .pv-toast.show { opacity: 1; }
+
+    .play-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: rgba(0, 0, 0, 0.45);
+      cursor: pointer;
+      z-index: 6;
+      user-select: none;
+    }
+    .play-overlay.show { display: flex; }
+    .play-overlay .po-btn {
+      width: 76px;
+      height: 76px;
+      border-radius: 50%;
+      background: rgba(229, 9, 20, 0.92);
+      color: #fff;
+      font-size: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding-left: 6px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+      transition: transform 0.15s;
+    }
+    .play-overlay:hover .po-btn { transform: scale(1.06); }
+    .play-overlay .po-text { font-size: 13px; color: #e6edf3; }
   </style>
 </head>
 <body>
@@ -837,6 +868,10 @@
     <div class="pv-stage" id="pvStage">
       <video id="h5Player" playsinline></video>
       <div class="pv-toast" id="pvToast"></div>
+      <div class="play-overlay" id="playOverlay" onclick="resumePlay()">
+        <div class="po-btn">▶</div>
+        <div class="po-text" id="playOverlayText">点击继续播放</div>
+      </div>
     </div>
 
     <div class="src-warn-bar" id="srcWarn" style="display:none;">
@@ -1672,6 +1707,34 @@
     // 方案：/api/remux 用 ffmpeg -c copy 重排时间戳后以 MPEG-TS 供流，mpegts.js 播放。
     // 拖动 = 以新位置重启 ffmpeg（约 2~3 秒）。
 
+    /** 尝试播放；被浏览器拦截时弹出「点击继续播放」遮罩 */
+    function tryPlay() {
+      const p = pvVideo.play();
+      if (p && p.catch) {
+        p.then(() => hidePlayOverlay()).catch(() => showPlayOverlay());
+      } else {
+        hidePlayOverlay();
+      }
+    }
+
+    function showPlayOverlay(text) {
+      const el = document.getElementById('playOverlay');
+      if (!el) return;
+      document.getElementById('playOverlayText').textContent = text || '点击继续播放';
+      el.classList.add('show');
+    }
+
+    function hidePlayOverlay() {
+      const el = document.getElementById('playOverlay');
+      if (el) el.classList.remove('show');
+    }
+
+    /** 用户点击遮罩：属于用户手势，可以正常播放 */
+    function resumePlay() {
+      hidePlayOverlay();
+      tryPlay();
+    }
+
     const compat = { on: false, player: null, url: '', base: 0, duration: 0 };
 
     function compatEnabled() {
@@ -1731,7 +1794,12 @@
           showToast('兼容模式播放出错：' + (d || t), 4000);
         });
         player.load();
-        player.play().catch(() => showToast('浏览器阻止了自动播放，点一下播放键即可'));
+
+        // 数据就绪后再尝试播放；若被浏览器拦截，改为显示「点击继续播放」
+        const onReady = () => { tryPlay(); };
+        pvVideo.addEventListener('canplay', onReady, { once: true });
+        tryPlay();
+        setTimeout(() => { if (pvVideo.paused && pvVideo.readyState >= 2) showPlayOverlay(); }, 4000);
       } catch (e) {
         showToast('兼容模式启动失败: ' + e.message, 4000);
         compat.on = false;
@@ -2202,7 +2270,7 @@
               if (hls.audioTracks && hls.audioTracks.length > 1) hls.audioTrack = 0;
             } catch (e) {}
             seek();
-            video.play().catch(() => showToast('浏览器阻止了自动播放，点一下播放键即可'));
+            tryPlay();
           });
           // 音轨被切换时记录一下，便于定位
           hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => { armAudioWatch(); });
@@ -2300,6 +2368,7 @@
       }
       document.getElementById('playerView').classList.remove('active');
       document.body.style.overflow = '';
+      hidePlayOverlay();
       hideBars();
     }
 
@@ -2402,20 +2471,27 @@
       document.getElementById(thumbId).style.left = p + '%';
     }
 
+    /** 当前可用的总时长（兼容模式用探测出来的真实时长） */
+    function seekDuration() {
+      if (compat.on && compat.duration > 0) return compat.duration;
+      const d = pvVideo.duration;
+      return isFinite(d) ? d : 0;
+    }
+
     const isSeekDragging = attachSlider(
       document.getElementById('seekBar'),
       (p) => {
         // 拖动时只更新视觉与时间预览，松手才真正跳转（避免 HLS 频繁 SEEK）
         seeking = true;
         paintSlider('seekFill', 'seekThumb', p);
-        const dur = isFinite(pvVideo.duration) ? pvVideo.duration : 0;
+        const dur = seekDuration();
         if (dur > 0) {
           document.getElementById('ctrlTime').textContent =
             `${fmtTime(p * dur)} / ${fmtTime(dur)}`;
         }
       },
       (p) => {
-        const dur = isFinite(pvVideo.duration) ? pvVideo.duration : 0;
+        const dur = seekDuration();
         if (dur > 0) {
           const target = Math.min(dur - 0.1, Math.max(0, p * dur));
           seekTo(target);
