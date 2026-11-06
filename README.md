@@ -128,26 +128,38 @@ data/tvbox.db-shm    共享内存索引
 data/backups/        自动备份（最多 20 份）
 ```
 
-### 自动备份
+### 备份与还原
 
-以下时机会自动生成 `data/backups/tvbox-<原因>-<时间>.db` 快照：
+数据库位于 `data/tvbox.db`，所有备份放在 `data/backups/`。
 
-| 时机 | 文件名标记 |
+**自动备份**（保留最新 **5** 份，超出自动清理）：
+
+| 时机 | 文件名 |
 |---|---|
-| 每次启动（库非空时） | `startup` |
-| 清空收藏前 | `before-clear-favorites` |
-| 清空历史前 | `before-clear-history` |
-| 执行「初始化」前 | `before-reset` |
-| 手动 `POST /api/backup` | `manual` |
+| 每次启动（库非空） | `tvbox-auto-startup-<时间>.db` |
+| 清空收藏前 | `tvbox-auto-before-clear-favorites-<时间>.db` |
+| 清空历史前 | `tvbox-auto-before-clear-history-<时间>.db` |
+| 执行「初始化」前 | `tvbox-auto-before-reset-<时间>.db` |
+| 每次还原前 | `tvbox-auto-before-restore-<时间>.db` |
 
-**误删后的恢复方法**（停服操作）：
+**手动备份**（`tvbox-manual-<时间>.db`）：**永不自动删除**，需要自己删。
+
+界面操作：顶栏 **「备份」** 按钮 → 面板里可以
+
+- **＋ 新建备份**：立即生成一份手动备份
+- **还原**：用该备份覆盖当前数据（还原前会自动再存一份，防还原错）
+- **删除**：删掉指定备份文件
+
+还原走的是「关闭连接 → 覆盖主库 → 清除 WAL → 重新打开」，不需要重启服务，页面刷新后即为还原后的数据。
+
+**命令行方式**（服务未启动时）：
 
 ```powershell
 cd D:\Projects\tvbox-pc
-Get-Process node | Stop-Process          # 1. 停止服务
-copy data\backups\tvbox-before-clear-favorites-20261105-234043.db data\tvbox.db  # 2. 覆盖
-Remove-Item data\tvbox.db-wal, data\tvbox.db-shm -ErrorAction SilentlyContinue     # 3. 清掉 WAL
-node server.js                            # 4. 重新启动
+Get-Process node | Stop-Process
+copy data\backups\tvbox-manual-20261106-225903.db data\tvbox.db
+Remove-Item data\tvbox.db-wal, data\tvbox.db-shm -ErrorAction SilentlyContinue
+node server.js
 ```
 
 ### 表结构

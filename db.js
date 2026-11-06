@@ -5,9 +5,14 @@ const fs = require('fs');
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new DatabaseSync(path.join(DATA_DIR, 'tvbox.db'));
+const DB_PATH = path.join(DATA_DIR, 'tvbox.db');
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
-db.exec(`
+let db = null;
+
+function openDb() {
+  db = new DatabaseSync(DB_PATH);
+  db.exec(`
   PRAGMA journal_mode = WAL;
 
   CREATE TABLE IF NOT EXISTS config (
@@ -45,7 +50,10 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_history_time ON history(updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_favorite_time ON favorite(created_at DESC);
-`);
+  `);
+}
+
+openDb();
 
 const now = () => Date.now();
 
@@ -149,7 +157,7 @@ const FavoriteRepo = {
 
 /* ---------- 备份 ---------- */
 
-const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const AUTO_KEEP = 5;   // 自动备份只保留最新 5 份
 
 function countAll() {
   const c = db.prepare('SELECT COUNT(*) c FROM config').get().c;
@@ -158,9 +166,30 @@ function countAll() {
   return { config: c, favorite: f, history: h };
 }
 
+function stamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/** 只清理「自动备份」，手动备份永不自动删除（按修改时间排序，不能按文件名） */
+function pruneAuto() {
+  try {
+    const autos = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.endsWith('.db') && !f.startsWith('tvbox-manual-'))
+      .map(f => ({ name: f, mtime: fs.statSync(path.join(BACKUP_DIR, f)).mtimeMs }))
+      .sort((a, b) => a.mtime - b.mtime);      // 旧 → 新
+
+    while (autos.length > AUTO_KEEP) {
+      const victim = autos.shift().name;
+      try { fs.unlinkSync(path.join(BACKUP_DIR, victim)); } catch (e) {}
+    }
+  } catch (e) {}
+}
+
 /**
  * 备份数据库（VACUUM INTO，生成一致性快照）
- * 空库不备份；最多保留 20 份
+ * @param {string} label  手动备份传 'manual'，其余均视为自动备份
  */
 function backup(label = 'auto') {
   try {
@@ -170,18 +199,13 @@ function backup(label = 'auto') {
     }
     if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
-    const d = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const file = path.join(BACKUP_DIR, `tvbox-${label}-${ts}.db`);
+    const isManual = label === 'manual';
+    const file = path.join(BACKUP_DIR, `tvbox-${isManual ? 'manual' : 'auto-' + label}-${stamp()}.db`);
 
     db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    if (!isManual) pruneAuto();
 
-    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.endsWith('.db')).sort();
-    while (files.length > 20) {
-      try { fs.unlinkSync(path.join(BACKUP_DIR, files.shift())); } catch (e) {}
-    }
-    return { file: path.basename(file), stats };
+    return { file: path.basename(file), stats, manual: isManual };
   } catch (e) {
     return { error: e.message };
   }
@@ -191,12 +215,62 @@ function listBackups() {
   if (!fs.existsSync(BACKUP_DIR)) return [];
   return fs.readdirSync(BACKUP_DIR)
     .filter(f => f.endsWith('.db'))
-    .sort()
-    .reverse()
     .map(f => {
-      const st = fs.statSync(path.join(BACKUP_DIR, f));
-      return { name: f, size: st.size, time: st.mtime.toISOString() };
-    });
+      const full = path.join(BACKUP_DIR, f);
+      const st = fs.statSync(full);
+      return {
+        name: f,
+        size: st.size,
+        time: st.mtime.toISOString(),
+        mtime: st.mtimeMs,
+        manual: f.startsWith('tvbox-manual-')
+      };
+    })
+    .sort((a, b) => b.mtime - a.mtime)      // 新的在前
+    .map(({ mtime, ...rest }) => rest);
 }
 
-module.exports = { db, ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups };
+/** 校验备份文件名，防目录穿越 */
+function safeBackupPath(name) {
+  if (!/^tvbox-[A-Za-z0-9._-]+\.db$/.test(name)) throw new Error('非法的备份文件名');
+  const full = path.join(BACKUP_DIR, name);
+  if (path.dirname(full) !== BACKUP_DIR) throw new Error('非法的备份路径');
+  if (!fs.existsSync(full)) throw new Error('备份文件不存在: ' + name);
+  return full;
+}
+
+function deleteBackup(name) {
+  const full = safeBackupPath(name);
+  fs.unlinkSync(full);
+  return { deleted: name };
+}
+
+/**
+ * 从备份还原：关闭连接 → 覆盖主库 → 清理 WAL → 重新打开
+ * 调用方需要在还原前先做一次安全备份
+ */
+function restoreBackup(name) {
+  const full = safeBackupPath(name);
+
+  // 先做一次「还原前」自动备份，防止还原错了还能回退
+  try { backup('before-restore'); } catch (e) {}
+
+  // 关闭连接并把 WAL 落盘，避免拷贝到半截数据
+  try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
+  try { db.close(); } catch (e) {}
+  db = null;
+
+  for (const suffix of ['-wal', '-shm']) {
+    const f = DB_PATH + suffix;
+    try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {}
+  }
+  fs.copyFileSync(full, DB_PATH);
+
+  openDb();
+  return { restored: name, stats: countAll() };
+}
+
+module.exports = {
+  db, ConfigRepo, HistoryRepo, FavoriteRepo,
+  backup, listBackups, deleteBackup, restoreBackup, countAll
+};

@@ -6,7 +6,7 @@ const fs = require('fs');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const PlayerLauncher = require('./playerLauncher');
-const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups } = require('./db');
+const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
 
 const app = express();
 // 端口优先级：环境变量 PORT > port.txt > 3980
@@ -534,12 +534,46 @@ app.get('/api/version', (req, res) => {
 /* ==================== 备份 ==================== */
 
 app.get('/api/backups', (req, res) => {
-  res.json({ dir: 'data/backups', list: listBackups() });
+  const list = listBackups();
+  res.json({
+    dir: 'data/backups',
+    autoKeep: 5,
+    manualCount: list.filter(b => b.manual).length,
+    autoCount: list.filter(b => !b.manual).length,
+    list
+  });
 });
 
+// 手动备份：永不自动删除，需手动删
 app.post('/api/backup', (req, res) => {
   const r = backup('manual');
   res.json({ success: !r.error, ...r });
+});
+
+app.delete('/api/backups/:name', (req, res) => {
+  try {
+    res.json({ success: true, ...deleteBackup(req.params.name) });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post('/api/backups/:name/restore', async (req, res) => {
+  try {
+    const r = restoreBackup(req.params.name);
+    // 库已被替换，内存里的站点状态需要重新加载
+    state.configId = null;
+    state.url = '';
+    state.sites = [];
+    state.activeSite = null;
+    const saved = ConfigRepo.list();
+    if (saved.length > 0) {
+      try { await applyConfig(saved[0]); } catch (e) {}
+    }
+    res.json({ success: true, ...r });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 /* ==================== 初始化 / 重置 ==================== */
