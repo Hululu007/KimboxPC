@@ -263,6 +263,7 @@ ipcMain.handle('mpv:state', () => {
     position: Number(p('time-pos') || 0),
     duration: Number(p('duration') || 0),
     paused: (() => { const v = p('pause'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
+    volume: Number(p('volume') || 0),
     idle: !!p('idle-active'),
     fps: frameCount,
     title: p('media-title') || ''
