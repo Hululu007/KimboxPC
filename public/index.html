@@ -55,7 +55,25 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      white-space: nowrap;
     }
+
+    .version-badge {
+      margin-left: 8px;
+      flex: 0 0 auto;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0;
+      cursor: default;
+      user-select: all;
+    }
+
+    .header-spacer { flex: 1 1 auto; }
 
     .config-box, .search-box {
       display: flex;
@@ -709,6 +727,9 @@
       <input type="text" id="searchInput" placeholder="搜索影片..." onkeyup="if(event.key==='Enter') doSearch()">
       <button class="secondary" onclick="doSearch()">搜索</button>
     </div>
+
+    <div class="header-spacer"></div>
+    <span class="version-badge" id="versionBadge" title="正在读取版本…">v—</span>
   </header>
 
   <!-- 分类栏 -->
@@ -833,10 +854,24 @@
         const sc = localStorage.getItem('tvbox_scope');
         if (sc) document.getElementById('searchScope').value = sc;
       } catch (e) {}
+      await loadVersion();
       await refreshConfigList();
       await loadPlayers();
       await bootstrap();
     };
+
+    async function loadVersion() {
+      const badge = document.getElementById('versionBadge');
+      try {
+        const v = await (await fetch('/api/version')).json();
+        badge.textContent = 'v' + v.version;
+        const started = new Date(v.startedAt);
+        badge.title = `TVBox PC v${v.version}\nNode ${v.node}\n服务启动于 ${started.toLocaleString()}`;
+      } catch (e) {
+        badge.textContent = 'v?';
+        badge.title = '无法读取版本';
+      }
+    }
 
     /* ==================== 外部播放器选择 ==================== */
 

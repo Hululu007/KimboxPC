@@ -518,6 +518,19 @@ app.delete('/api/favorites/:siteKey/:vodId', (req, res) => {
   res.json({ success: true });
 });
 
+/* ==================== 版本信息 ==================== */
+
+const PKG = require('./package.json');
+
+app.get('/api/version', (req, res) => {
+  res.json({
+    version: PKG.version,
+    name: PKG.name,
+    startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    node: process.versions.node
+  });
+});
+
 /* ==================== 备份 ==================== */
 
 app.get('/api/backups', (req, res) => {
