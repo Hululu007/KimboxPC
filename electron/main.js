@@ -24,6 +24,8 @@ let frameCount = 0;
 let renderW = 1280;
 let renderH = 720;
 let lastFrameAt = 0;
+let lastKnownDuration = 0;
+let playbackStarted = false;
 
 /* ---------- 内嵌服务端 ---------- */
 function startServer() {
@@ -230,6 +232,8 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     if (s > 0) setTimeout(() => { try { native.setProp(i, 'start', '0'); } catch (e) {} }, 3000);
     startRenderLoop();
     frameCount = 0;
+    lastKnownDuration = 0;
+    playbackStarted = true;
     return { ok: true, render: `${renderW}x${renderH}` };
   } catch (e) {
     return { error: e.message };
@@ -257,6 +261,13 @@ ipcMain.handle('mpv:cmd', (evt, { name, args }) => {
 ipcMain.handle('mpv:state', () => {
   if (!inst || !native) return { running: false, connected: false };
   const p = (n) => { try { return native.getProp(inst, n); } catch (e) { return null; } };
+
+  const dur = Number(p('duration') || 0);
+  if (dur > 0) lastKnownDuration = dur;
+  const idleNow = p('idle-active') === 'yes' || p('idle-active') === true || p('idle-active') === 1;
+  const eofNow = (() => { const v = p('eof-reached'); return v === 'yes' || v === 'true' || v === 1 || v === true; })();
+  // 播完后 mpv 会卸载当前文件回到 idle，此时 eof-reached 已复位，只能靠「曾经播过且现在 idle」判断
+  const ended = eofNow || (idleNow && playbackStarted && lastKnownDuration > 0);
   return {
     running: true,
     connected: true,
@@ -265,6 +276,9 @@ ipcMain.handle('mpv:state', () => {
     paused: (() => { const v = p('pause'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
     volume: Number(p('volume') || 0),
     muted: (() => { const v = p('mute'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
+    eof: eofNow,
+    ended,
+    idle: idleNow,
     idle: !!p('idle-active'),
     fps: frameCount,
     title: p('media-title') || ''

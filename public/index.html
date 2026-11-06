@@ -992,6 +992,10 @@
             <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
             兼容模式：服务端转封装（默认开启，修复声音异常；拖动约需 2~3 秒）
           </label>
+          <label class="audio-auto">
+            <input type="checkbox" id="autoNextChk" onchange="saveAutoNext(this.checked)">
+            自动连播下一集（默认开启，本集播完自动接下一集）
+          </label>
         </div>
 
 
@@ -2081,6 +2085,10 @@
           mpvState.duration = s.duration || 0;
           mpvState.title = s.title || '';
           if (typeof s.volume === 'number') { mpvState.volume = s.volume; updateVolumeUI(); }
+          if ((s.position || 0) > 5) sawProgress = true;
+          mpvState.ended = !!s.ended;
+          mpvState.idle = !!s.idle;
+          mpvState.eof = !!s.eof;
           if (typeof s.volume === 'number') mpvState.volume = s.volume;
           updateControls();
         } catch (e) {}
@@ -2600,8 +2608,58 @@
     const DIRECT_MEDIA_RE = /\.(m3u8|mp4|flv|mkv|ts|webm|mp3|m4a)(\?|#|$)/i;
     let playToken = 0;
 
+    /* ==================== 自动连播下一集 ==================== */
+    let eofHandled = false;
+    let sawProgress = false;   // 本次播放是否真的推进过（用于确认「已播到结尾」而非刚开始）
+
+    function autoNextEnabled() {
+      try { return localStorage.getItem('tvbox_autonext') !== '0'; } catch (e) { return true; }
+    }
+    function saveAutoNext(v) {
+      try { localStorage.setItem('tvbox_autonext', v ? '1' : '0'); } catch (e) {}
+      if (v) showToast('已开启自动连播', 1600);
+    }
+
+    /** 当前是否已播到结尾 */
+    function isPlaybackEnded() {
+      if (isMpv()) return sawProgress && !!(mpvState.eof || mpvState.ended);
+      const d = seekDuration();
+      if (!(d > 0)) return false;
+      const p = compat.on ? compatPosition() : (isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0);
+      return p >= d - 1.5;
+    }
+
+    /** 播完自动切下一集 */
+    function maybeAutoNext() {
+      if (eofHandled || !autoNextEnabled()) return;
+      if (!document.getElementById('playerView').classList.contains('active')) return;
+      if (!isPlaybackEnded()) return;
+
+      const source = currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
+      if (!source || !source.episodes || !source.episodes.length) return;
+
+      eofHandled = true;
+      const next = currentEpIdx + 1;
+      if (next >= source.episodes.length) {
+        showToast('已播放完最后一集', 3500);
+        return;
+      }
+      const ep = source.episodes[next];
+      currentEpIdx = next;
+      const btns = document.querySelectorAll('#mEpisodes .ep-btn');
+      btns.forEach((b, i) => b.classList.toggle('active', i === next));
+      showToast(`即将播放：${ep.title}`, 2600);
+      setTimeout(() => {
+        if (document.getElementById('playerView').classList.contains('active')) {
+          playEpisode(ep.url, 0);
+        }
+      }, 800);
+    }
+
     async function playEpisode(url, resumeAt = 0) {
       const token = ++playToken;
+      eofHandled = false;
+      sawProgress = false;
       const video = document.getElementById('h5Player');
 
       // 彻底重置媒体元素：只销毁 hls 实例时，video 上残留的 MediaSource
@@ -2971,6 +3029,8 @@
     function initPlayerOptions() {
       const cp = document.getElementById('compatChk');
       if (cp) cp.checked = compatEnabled();
+      const an = document.getElementById('autoNextChk');
+      if (an) an.checked = autoNextEnabled();
     }
 
     /** 有问题源时显示提示条 */
@@ -3033,6 +3093,8 @@
       }, 3000);
     }
 
+    pvVideo.addEventListener('ended', () => { eofHandled = false; maybeAutoNext(); });
+
     initPlayerOptions();
     startAudioWatch();
 
@@ -3073,6 +3135,8 @@
     );
 
     function updateControls() {
+      maybeAutoNext();
+
       if (isMpv()) {
         const dur = mpvState.duration || 0;
         const pos = mpvState.position || 0;
