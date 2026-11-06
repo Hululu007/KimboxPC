@@ -65,6 +65,14 @@ function createMainWindow() {
   });
   mainWin.setMenuBarVisibility(false);
   mainWin.loadURL(`http://127.0.0.1:${PORT}/`);
+  // 全屏状态变化（含 Esc 由系统触发的情况）通知渲染进程
+  mainWin.on('enter-full-screen', () => {
+    if (!mainWin.isDestroyed()) mainWin.webContents.send('shell:fullscreen-changed', { fullscreen: true });
+  });
+  mainWin.on('leave-full-screen', () => {
+    if (!mainWin.isDestroyed()) mainWin.webContents.send('shell:fullscreen-changed', { fullscreen: false });
+  });
+
   mainWin.on('closed', () => {
     mainWin = null;
     stopPlayback();
@@ -198,6 +206,7 @@ ipcMain.handle('shell:info', () => {
 ipcMain.handle('mpv:open', (evt, payload) => {
   try {
     const { url, title, start, width, height } = payload || {};
+    console.log('[mpv:open]', JSON.stringify({ start, width, height, url: String(url).slice(-40) }));
     if (!url) return { error: '缺少 url' };
 
     if (width && height) {
@@ -211,10 +220,14 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     if (title) {
       try { native.setProp(i, 'force-media-title', title); } catch (e) {}
     }
-    const args = ['loadfile', url];
-    if (Number(start) > 0) args.push('replace', `start=+${Math.floor(start)}`);
-    native.command(i, args);
+    // 续播定位用 start 选项（loadfile 的第 4 个参数在 IPC 里不接受字符串，会报 invalid parameter）
+    const s = Math.floor(Number(start) || 0);
+    if (s > 0) native.setProp(i, 'start', String(s));
+    else native.setProp(i, 'start', '0');
+
+    native.command(i, ['loadfile', url, 'replace']);
     native.setProp(i, 'pause', false);
+    if (s > 0) setTimeout(() => { try { native.setProp(i, 'start', '0'); } catch (e) {} }, 3000);
     startRenderLoop();
     frameCount = 0;
     return { ok: true, render: `${renderW}x${renderH}` };

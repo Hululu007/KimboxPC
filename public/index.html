@@ -1897,32 +1897,38 @@
     /* ---------- 桌面版全屏 ---------- */
     let nativeFullscreen = false;
 
+    /** 应用全屏状态（只改样式与渲染尺寸，不动播放） */
+    function applyFullscreenState(on) {
+      if (nativeFullscreen === on) return;
+      nativeFullscreen = on;
+      const view = document.getElementById('playerView');
+      if (view) view.classList.toggle('native-fs', on);
+      document.body.classList.toggle('native-fs', on);
+
+      // 舞台尺寸变了，只需重建渲染缓冲，播放位置不受影响
+      setTimeout(() => {
+        if (!isMpv() || !isNativeShell()) return;
+        const { w, h } = calcRenderSize();
+        window.kimbox.resize(w, h).catch(() => {});
+      }, 300);
+    }
+
     async function toggleNativeFullscreen() {
       try {
-        nativeFullscreen = !nativeFullscreen;
-        const r = await window.kimbox.setFullscreen(nativeFullscreen);
+        const target = !nativeFullscreen;
+        const r = await window.kimbox.setFullscreen(target);
         if (r && r.error) { showToast('全屏切换失败：' + r.error, 3000); return; }
-        document.getElementById('playerView').classList.toggle('native-fs', nativeFullscreen);
-        document.body.classList.toggle('native-fs', nativeFullscreen);
-        // 全屏后舞台尺寸变了，重建渲染分辨率
-        setTimeout(() => {
-          if (!isMpv() || !isNativeShell()) return;
-          const { w, h } = calcRenderSize();
-          window.kimbox.resize(w, h).catch(() => {});
-        }, 350);
-        showToast(nativeFullscreen ? '已全屏（按 Esc 退出）' : '已退出全屏', 1800);
+        applyFullscreenState(!!r.fullscreen);
+        showToast(r.fullscreen ? '已全屏（按 Esc 退出）' : '已退出全屏', 1500);
       } catch (e) {
         showToast('全屏切换失败：' + e.message, 3000);
       }
     }
 
-    // Esc 退出全屏
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && nativeFullscreen && isNativeShell()) {
-        nativeFullscreen = true;
-        toggleNativeFullscreen();
-      }
-    });
+    // Electron 触发全屏变化（包括系统 Esc）时同步界面，播放不中断
+    if (window.kimbox && window.kimbox.onFullscreenChange) {
+      window.kimbox.onFullscreenChange(({ fullscreen }) => applyFullscreenState(!!fullscreen));
+    }
 
     function focusMpvWindow() {
       fetch('/api/mpv/cmd', {
@@ -2746,6 +2752,7 @@
       document.body.style.overflow = '';
       hidePlayOverlay();
       hideBars();
+      if (nativeFullscreen && isNativeShell()) { try { window.kimbox.setFullscreen(false); } catch (e) {} nativeFullscreen = false; document.getElementById('playerView').classList.remove('native-fs'); }
     }
 
     // 全屏时控制条自动隐藏；窗口模式下始终显示

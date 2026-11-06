@@ -20,6 +20,13 @@ contextBridge.exposeInMainWorld('kimbox', {
   setFullscreen: (on) => ipcRenderer.invoke('shell:fullscreen', { on }),
   isFullscreen: () => ipcRenderer.invoke('shell:isfullscreen'),
 
+  // 全屏状态变化（含系统 Esc 触发）
+  onFullscreenChange: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('shell:fullscreen-changed', handler);
+    return () => ipcRenderer.removeListener('shell:fullscreen-changed', handler);
+  },
+
   // 字幕 / 音轨
   tracks: () => ipcRenderer.invoke('mpv:tracks'),
   setTrack: (kind, id) => ipcRenderer.invoke('mpv:setTrack', { kind, id }),
