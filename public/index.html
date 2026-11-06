@@ -989,16 +989,8 @@
       <div class="pv-panel-body">
         <div id="compatOptions">
           <label class="audio-auto">
-            <input type="checkbox" id="autoReloadChk" onchange="saveAutoReload(this.checked)">
-            音频异常时自动重载（默认关；开启后约中断 1~2 秒）
-          </label>
-          <label class="audio-auto">
-            <input type="checkbox" id="autoExtChk" onchange="saveAutoExt(this.checked)">
-            问题源自动用外部播放器（默认关；该源封装有缺陷时自动交给 PotPlayer）
-          </label>
-          <label class="audio-auto">
             <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
-            兼容模式：服务端转封装（修复声音异常；拖动约需 2~3 秒）
+            兼容模式：服务端转封装（默认开启，修复声音异常；拖动约需 2~3 秒）
           </label>
         </div>
 
@@ -1788,12 +1780,7 @@
           }
           showSourceWarn(disc);
           if (!disc || silent) return;
-          if (autoExtEnabled()) {
-            showToast(`该源有 ${disc} 处时间戳重置，已自动交给外部播放器`, 4000);
-            setTimeout(() => playWithExternalPlayer(), 600);
-          } else {
-            showToast(`该源有 ${disc} 处时间戳重置，网页播放可能声音异常；可开兼容模式或用外部播放器`, 6000);
-          }
+          showToast(`该源有 ${disc} 处时间戳重置，已用兼容模式转封装，声音异常可换源`, 5000);
         })
         .catch(() => {});
     }
@@ -2144,7 +2131,8 @@
     const compat = { on: false, player: null, url: '', base: 0, duration: 0 };
 
     function compatEnabled() {
-      try { return localStorage.getItem('tvbox_compat') === '1'; } catch (e) { return false; }
+      // 默认开启：浏览器引擎下用它规避时间戳重置导致的音频异常
+      try { const v = localStorage.getItem('tvbox_compat'); return v === null ? true : v === '1'; } catch (e) { return true; }
     }
 
     async function toggleCompat(v) {
@@ -2974,28 +2962,10 @@
     let audioStallCount = 0;
     let lastAutoRecover = 0;
 
-    /** 是否开启「音频异常自动重载」（默认关，避免打断观看） */
-    function autoReloadEnabled() {
-      try { return localStorage.getItem('tvbox_autoreload') === '1'; } catch (e) { return false; }
-    }
-    function saveAutoReload(v) {
-      try { localStorage.setItem('tvbox_autoreload', v ? '1' : '0'); } catch (e) {}
-    }
-    function initAutoReloadChk() {
-      const chk = document.getElementById('autoReloadChk');
-      if (chk) chk.checked = autoReloadEnabled();
-      const ext = document.getElementById('autoExtChk');
-      if (ext) ext.checked = autoExtEnabled();
+    /** 初始化玩家选项（目前只剩兼容模式） */
+    function initPlayerOptions() {
       const cp = document.getElementById('compatChk');
       if (cp) cp.checked = compatEnabled();
-    }
-
-    /** 问题源是否自动交给外部播放器 */
-    function autoExtEnabled() {
-      try { return localStorage.getItem('tvbox_autoext') === '1'; } catch (e) { return false; }
-    }
-    function saveAutoExt(v) {
-      try { localStorage.setItem('tvbox_autoext', v ? '1' : '0'); } catch (e) {}
     }
 
     /** 有问题源时显示提示条 */
@@ -3003,7 +2973,7 @@
       const box = document.getElementById('srcWarn');
       const txt = document.getElementById('srcWarnText');
       if (!box || !txt) return;
-      if (!disc || disc <= 0 || isMpv()) { box.style.display = 'none'; return; }
+      if (!disc || disc <= 0 || isMpv() || compatEnabled()) { box.style.display = 'none'; return; }
       txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
       box.style.display = 'flex';
     }
@@ -3043,22 +3013,12 @@
             const now = Date.now();
             audioStallCount = 0;
 
-            if (autoReloadEnabled()) {
-              // 用户主动开启：自动恢复
-              if (now - lastAutoRecover > 30000) {
-                lastAutoRecover = now;
-                window.__autoRecoverCount = (window.__autoRecoverCount || 0) + 1;
-                showToast('检测到音频异常，正在自动重载…', 3000);
-                reloadCurrentEpisode(true);
-              }
-            } else {
-              // 默认：只提示，不打断观看
-              if (now - lastAutoRecover > 30000) {
-                lastAutoRecover = now;
-                window.__autoHintCount = (window.__autoHintCount || 0) + 1;
-                showToast('音频似乎不太对？点右下角 ⟳ 可重载本集', 4000);
-                highlightReload();
-              }
+            // 只提示，不打断观看
+            if (now - lastAutoRecover > 30000) {
+              lastAutoRecover = now;
+              window.__autoHintCount = (window.__autoHintCount || 0) + 1;
+              showToast('音频似乎不太对？点右下角 ⟳ 可重载本集', 4000);
+              highlightReload();
             }
           }
         } else {
@@ -3068,7 +3028,7 @@
       }, 3000);
     }
 
-    initAutoReloadChk();
+    initPlayerOptions();
     startAudioWatch();
 
     /** 用当前模式的实际音量刷新音量条与静音图标 */
