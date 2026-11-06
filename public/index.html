@@ -1815,8 +1815,17 @@
       if (sel) sel.value = engineMode();
     }
 
-    function changeEngine(v) {
+    async function changeEngine(v) {
+      const prev = engineMode();
       try { localStorage.setItem('tvbox_engine', v); } catch (e) {}
+
+      // 引擎切换必须先停掉旧引擎，否则两路同时出声
+      if (prev !== v) {
+        try { pvVideo.pause(); } catch (e) {}
+        if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+        try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
+        await stopMpvPlayback();
+      }
       if (v === 'mpv') showToast('已切换到 mpv 内核，正在重载…', 2500);
       if (currentDetail) reloadCurrentEpisode(true);
       else syncEngineUI();
@@ -1842,7 +1851,28 @@
       });
     }
 
+    /** 彻底停掉 mpv 播放（原生或独立窗口），避免切引擎后两路同时出声 */
+    async function stopMpvPlayback() {
+      stopMpvPolling();
+      if (frameUnsub) { try { frameUnsub(); } catch (e) {} frameUnsub = null; }
+      const canvas = document.getElementById('mpvCanvas');
+      if (canvas) {
+        canvas.classList.remove('show');
+        try { canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height); } catch (e) {}
+      }
+      mpvState.running = false;
+      mpvState.paused = true;
+      mpvState.position = 0;
+      if (isNativeShell()) {
+        try { await window.kimbox.stop(); } catch (e) {}
+      } else {
+        fetch('/api/mpv/stop', { method: 'POST' }).catch(() => {});
+      }
+    }
+
     /* ---------- 字幕 / 音轨 ---------- */
+
+
     async function refreshTracks() {
       const row = document.getElementById('trackRow');
       const label = document.getElementById('trackRowLabel');
@@ -2618,6 +2648,7 @@
         return;
       }
       syncEngineUI();
+      await stopMpvPlayback();   // 从 mpv 切回浏览器时，先停掉 mpv，避免两路同时出声
       setTimeout(updateVolumeUI, 300);
 
       // 兼容模式：改走服务端转封装，彻底规避时间戳重置导致的音频异常
