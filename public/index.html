@@ -107,18 +107,21 @@
 
     /* 分类标签栏 */
     .tabs-bar {
-      padding: 12px 24px;
+      padding: 10px 24px;
       background: var(--card-bg);
       border-bottom: 1px solid var(--border);
       display: flex;
-      gap: 10px;
-      overflow-x: auto;
-      white-space: nowrap;
+      flex-wrap: wrap;
+      gap: 8px 10px;
+      overflow-y: auto;
+      overflow-x: hidden;
     }
     .tab-item {
       padding: 6px 14px;
       border-radius: 20px;
       font-size: 14px;
+      white-space: nowrap;
+      flex: 0 0 auto;
       cursor: pointer;
       color: var(--text-muted);
       background: transparent;
@@ -1138,7 +1141,46 @@
       });
 
       bar.querySelector('.tab-item').classList.add('active');
+      fitTabs();
     }
+
+    /**
+     * 分类栏排版：默认两排一眼看全；两排装不下自动扩到三排；
+     * 超过三排才在栏内滚动，避免把内容区挤没。
+     */
+    function fitTabs() {
+      const bar = document.getElementById('categoryTabs');
+      if (!bar) return;
+      const items = bar.querySelectorAll('.tab-item');
+      if (!items.length) { bar.style.maxHeight = ''; return; }
+
+      bar.style.maxHeight = 'none';
+      const natural = bar.scrollHeight;
+      const cs = getComputedStyle(bar);
+      const padT = parseFloat(cs.paddingTop) || 0;
+      const padB = parseFloat(cs.paddingBottom) || 0;
+      const gap = parseFloat(cs.rowGap) || 8;
+      const rowH = items[0].offsetHeight || 29;
+
+      const content = Math.max(0, natural - padT - padB);
+      const rows = Math.max(1, Math.round((content + gap) / (rowH + gap)));
+      const allowed = Math.min(rows, 3);
+
+      if (rows <= 3) {
+        bar.style.maxHeight = natural + 'px';
+        bar.style.overflowY = 'hidden';
+      } else {
+        bar.style.maxHeight = (padT + padB + allowed * rowH + (allowed - 1) * gap) + 'px';
+        bar.style.overflowY = 'auto';
+      }
+    }
+
+    // 窗口尺寸变化时重新排版
+    let tabResizeTimer = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(tabResizeTimer);
+      tabResizeTimer = setTimeout(fitTabs, 150);
+    });
 
     // 列表分页状态
     let listState = { mode: 'home', tid: '', page: 1, pagecount: 1, loading: false, total: 0 };
