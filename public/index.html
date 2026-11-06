@@ -570,7 +570,7 @@
 
     .ctrl-vol {
       flex: 0 0 auto;
-      width: 84px;
+      width: 112px;
       height: 16px;
       display: flex;
       align-items: center;
@@ -2053,6 +2053,7 @@
           mpvState.position = s.position || 0;
           mpvState.duration = s.duration || 0;
           mpvState.title = s.title || '';
+          if (typeof s.volume === 'number') { mpvState.volume = s.volume; updateVolumeUI(); }
           if (typeof s.volume === 'number') mpvState.volume = s.volume;
           updateControls();
         } catch (e) {}
@@ -2380,6 +2381,7 @@
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       document.body.style.overflow = 'hidden';
+      updateVolumeUI();
       document.getElementById('mTitle').textContent = '加载中...';
       document.getElementById('mMeta').textContent = '';
       document.getElementById('mDesc').textContent = '';
@@ -2611,6 +2613,7 @@
         return;
       }
       syncEngineUI();
+      setTimeout(updateVolumeUI, 300);
 
       // 兼容模式：改走服务端转封装，彻底规避时间戳重置导致的音频异常
       if (compatEnabled() && finalUrl.includes('.m3u8')) {
@@ -2753,6 +2756,7 @@
       document.body.style.overflow = '';
       hidePlayOverlay();
       hideBars();
+      updateVolumeUI();
       if (nativeFullscreen && isNativeShell()) { try { window.kimbox.setFullscreen(false); } catch (e) {} nativeFullscreen = false; document.getElementById('playerView').classList.remove('native-fs'); }
     }
 
@@ -3031,13 +3035,32 @@
     initAutoReloadChk();
     startAudioWatch();
 
+    /** 用当前模式的实际音量刷新音量条与静音图标 */
+    function updateVolumeUI() {
+      let p = 0, muted = false;
+      if (isMpv()) {
+        const vol = typeof mpvState.volume === 'number' ? mpvState.volume : 100;
+        muted = !!mpvState.muted || vol === 0;
+        p = muted ? 0 : Math.min(1, Math.max(0, vol / 100));
+      } else {
+        muted = pvVideo.muted || pvVideo.volume === 0;
+        p = muted ? 0 : Math.min(1, Math.max(0, pvVideo.volume));
+      }
+      paintSlider('volFill', 'volThumb', p);
+      const btn = document.getElementById('btnMute');
+      if (btn) btn.innerHTML = muted ? ICON.mute : ICON.vol;
+    }
+
     attachSlider(
       document.getElementById('volBar'),
       (p) => {
         if (isMpv()) {
-          mpvCmd('set_property', ['volume', Math.round(Math.min(1, Math.max(0, p)) * 100)]);
-          paintSlider('volFill', 'volThumb', p);
-          document.getElementById('btnMute').innerHTML = p === 0 ? ICON.mute : ICON.vol;
+          const vol = Math.round(Math.min(1, Math.max(0, p)) * 100);
+          mpvState.volume = vol;
+          mpvCmd('set_property', ['volume', vol]);
+          if (vol > 0 && mpvState.muted) { mpvState.muted = false; mpvCmd('set_property', ['mute', false]); }
+          if (vol === 0) mpvState.muted = true;
+          updateVolumeUI();
           return;
         }
         pvVideo.muted = p === 0;
@@ -3105,7 +3128,13 @@
     }
 
     function toggleMute() {
-      if (isMpv()) { mpvCmd('cycle', ['mute']); showBars(); return; }
+      if (isMpv()) {
+        mpvCmd('cycle', ['mute']).then(() => setTimeout(updateVolumeUI, 200));
+        mpvState.muted = !mpvState.muted;
+        updateVolumeUI();
+        showBars();
+        return;
+      }
       pvVideo.muted = !pvVideo.muted;
       if (!pvVideo.muted && pvVideo.volume === 0) pvVideo.volume = 1;
       updateControls();
