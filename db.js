@@ -39,6 +39,16 @@ function openDb() {
     PRIMARY KEY (site_key, vod_id)
   );
 
+  CREATE TABLE IF NOT EXISTS episode_history (
+    site_key   TEXT NOT NULL,
+    vod_id     TEXT NOT NULL,
+    ep_index   INTEGER NOT NULL,
+    position   REAL NOT NULL DEFAULT 0,
+    duration   REAL NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (site_key, vod_id, ep_index)
+  );
+
   CREATE TABLE IF NOT EXISTS favorite (
     site_key   TEXT NOT NULL,
     vod_id     TEXT NOT NULL,
@@ -139,6 +149,44 @@ const HistoryRepo = {
   },
   clear() {
     db.prepare('DELETE FROM history').run();
+    try { db.prepare('DELETE FROM episode_history').run(); } catch (e) {}
+  }
+};
+
+/* ---------- 分集进度 ---------- */
+const EpisodeRepo = {
+  /** 某部片所有集的进度：{ epIndex: position } */
+  map(siteKey, vodId) {
+    const rows = db.prepare(
+      'SELECT ep_index, position, duration FROM episode_history WHERE site_key = ? AND vod_id = ?'
+    ).all(siteKey, String(vodId));
+    const out = {};
+    for (const r of rows) out[r.ep_index] = { position: r.position, duration: r.duration };
+    return out;
+  },
+  get(siteKey, vodId, epIndex) {
+    return db.prepare(
+      'SELECT * FROM episode_history WHERE site_key = ? AND vod_id = ? AND ep_index = ?'
+    ).get(siteKey, String(vodId), Number(epIndex));
+  },
+  save(h) {
+    db.prepare(`
+      INSERT INTO episode_history (site_key, vod_id, ep_index, position, duration, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(site_key, vod_id, ep_index) DO UPDATE SET
+        position = excluded.position,
+        duration = excluded.duration,
+        updated_at = excluded.updated_at
+    `).run(
+      h.siteKey, String(h.vodId), Number(h.epIndex || 0),
+      Number(h.position || 0), Number(h.duration || 0), now()
+    );
+  },
+  removeAll(siteKey, vodId) {
+    db.prepare('DELETE FROM episode_history WHERE site_key = ? AND vod_id = ?').run(siteKey, String(vodId));
+  },
+  clear() {
+    db.prepare('DELETE FROM episode_history').run();
   }
 };
 
@@ -288,6 +336,6 @@ function restoreBackup(name) {
 }
 
 module.exports = {
-  db, ConfigRepo, HistoryRepo, FavoriteRepo,
+  db, ConfigRepo, HistoryRepo, FavoriteRepo, EpisodeRepo,
   backup, listBackups, deleteBackup, restoreBackup, countAll
 };

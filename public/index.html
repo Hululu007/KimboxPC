@@ -718,6 +718,8 @@
       white-space: nowrap;
     }
     .ep-btn:hover { border-color: var(--accent); }
+    .ep-btn .ep-prog { font-size: 10px; color: #7f9bb0; }
+    .ep-btn.active .ep-prog { color: rgba(255,255,255,0.85); }
     .ep-btn.active {
       background: var(--accent);
       border-color: var(--accent);
@@ -2559,11 +2561,15 @@
       if (!source || !source.episodes) return;
 
       const h = currentDetail.history;
+      const epProgress = currentDetail.episodeProgress || {};
       let startIdx = 0;
       let resumeAt = 0;
       if (h && !isManualSwitch && (!h.source || h.source === source.sourceName)) {
         startIdx = Math.min(Math.max(0, Number(h.ep_index) || 0), source.episodes.length - 1);
-        resumeAt = Number(h.position) || 0;
+        // 分集进度优先；没有该集记录时退回总历史位置（仅当集数一致）
+        const pp = epProgress[startIdx];
+        if (pp && Number(pp.position) > 0) resumeAt = Number(pp.position);
+        else if (Number(h.ep_index) === startIdx) resumeAt = Number(h.position) || 0;
       }
       // 从「同片源」切换过来：尽量停留在同一集
       if (pendingEpIdx !== null && pendingEpIdx !== undefined) {
@@ -2577,11 +2583,26 @@
         const btn = document.createElement('button');
         btn.className = `ep-btn ${idx === startIdx ? 'active' : ''}`;
         btn.textContent = ep.title;
+
+        // 已看的集显示百分比
+        const pp = epProgress[idx];
+        if (pp && Number(pp.position) > 5) {
+          const tag = document.createElement('span');
+          tag.className = 'ep-prog';
+          const pct = Number(pp.duration) > 0
+            ? Math.min(99, Math.round(Number(pp.position) / Number(pp.duration) * 100))
+            : 0;
+          tag.textContent = pct > 0 ? ` ${pct}%` : ' ●';
+          btn.appendChild(tag);
+        }
+
         btn.onclick = () => {
           document.querySelectorAll('.ep-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           currentEpIdx = idx;
-          playEpisode(ep.url, 0);
+          const saved = epProgress[idx] ? Number(epProgress[idx].position) || 0 : 0;
+          playEpisode(ep.url, saved);
+          if (saved > 5) showToast(`第 ${idx + 1} 集从 ${fmtTime(saved)} 继续`, 2000);
         };
         container.appendChild(btn);
       });
