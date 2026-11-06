@@ -34,6 +34,7 @@
 | 项目 | 是否必需 | 说明 |
 |---|---|---|
 | **随附便携版 Node**（推荐） | ⚪ 免安装 | 把官方 `node-vXX-win-x64` 解压到项目根目录即可，`start.bat` 会**优先使用它**并加到 PATH 最前面——不装系统 Node、不弹 UAC、版本固定 |
+| **随附 ffmpeg**（兼容模式用） | ⚪ 免安装 | `ffmpeg\ffmpeg.exe`（约 100 MB）；「兼容模式」转封装需要它，缺失时自动回退到系统安装的 ffmpeg |
 | **Node.js 22.5+**（推荐 24） | ✅ 备选 | 没放便携版时使用系统已安装的 Node；[nodejs.org](https://nodejs.org) 下载 LTS 版 |
 | 本地 Node 安装包（可选） | ⚪ 免手动 | 把 `node-*-x64.msi` 放进 `Setup/`，都没检测到时**静默安装**（会弹一次 UAC） |
 | npm 依赖（express / axios / cors） | ⚪ 自动 | 首次双击 `start.bat` 会自动 `npm install`（需联网一次），之后离线可跑 |
@@ -62,6 +63,7 @@ Setup\node-*.msi 静默安装（弹一次 UAC）
 整个目录就是绿色版，**复制到任何位置都能直接用**（已实测含空格与中文的路径，如 `D:\我的 工具\tvbox-pc`）：
 
 - 必须一起带走：`node-v24.22.2-win-x64/`（便携 Node）、`node_modules/`（依赖）、`public/`、所有 `.js`、`start.bat`、`stop.bat`
+- 兼容模式还需要：`ffmpeg/ffmpeg.exe`（随附，约 100 MB；不带则兼容模式不可用，普通播放不受影响）
 - 可选：`data/`（你的配置源、收藏、观看记录——想保留就从旧目录拷过来）
 - 不需要：`.git/`、`Setup/`
 - 目标机器**无需安装 Node**，也无需管理员权限

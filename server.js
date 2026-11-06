@@ -475,6 +475,11 @@ let ffmpegPath = null;
 function findFfmpeg() {
   if (ffmpegPath !== null) return ffmpegPath;
   const cands = [
+    // 优先使用随附的便携版（不依赖系统安装）
+    path.join(__dirname, 'ffmpeg', 'ffmpeg.exe'),
+    path.join(__dirname, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+    path.join(__dirname, 'bin', 'ffmpeg.exe'),
+    // 其次系统安装位置
     path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'),
     'C:\\ffmpeg\\bin\\ffmpeg.exe',
     path.join(process.env.ProgramFiles || 'C:\\Program Files', 'ffmpeg', 'bin', 'ffmpeg.exe')
