@@ -7,7 +7,6 @@ const os = require('os');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const PlayerLauncher = require('./playerLauncher');
-const Mpv = require('./mpvController');
 const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
 
 const app = express();
@@ -464,56 +463,6 @@ app.get('/api/resolve', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
-
-/* ==================== mpv 内核播放（IPC 控制） ==================== */
-
-app.get('/api/mpv/status', async (req, res) => {
-  const exe = Mpv.findMpv();
-  let st = null;
-  try { st = await Mpv.getState(); } catch (e) {}
-  res.json({ available: !!exe, path: exe || '', state: st });
-});
-
-app.get('/api/mpv/state', async (req, res) => {
-  try {
-    res.json(await Mpv.getState());
-  } catch (e) {
-    res.json({ running: false, connected: false, error: e.message });
-  }
-});
-
-app.post('/api/mpv/open', async (req, res) => {
-  const { url, title, start } = req.body || {};
-  if (!url) return res.status(400).json({ error: '缺少 url' });
-  try {
-    await Mpv.load(url, title || '', Number(start) || 0);
-    res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-const MPV_ALLOWED = new Set(['seek', 'cycle', 'set_property', 'stop', 'quit', 'frame-step', 'frame-back-step']);
-const MPV_ALLOWED_PROPS = new Set(['pause', 'volume', 'speed', 'mute', 'fullscreen', 'ontop', 'keep-open']);
-
-app.post('/api/mpv/cmd', async (req, res) => {
-  const { name, args } = req.body || {};
-  if (!MPV_ALLOWED.has(name)) return res.status(400).json({ error: '不允许的命令: ' + name });
-  if (name === 'set_property' && !MPV_ALLOWED_PROPS.has(String((args || [])[0]))) {
-    return res.status(400).json({ error: '不允许修改的属性: ' + (args || [])[0] });
-  }
-  try {
-    const r = await Mpv.command(name, Array.isArray(args) ? args : []);
-    res.json({ success: true, data: r });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/mpv/stop', (req, res) => {
-  Mpv.stop();
-  res.json({ success: true });
 });
 
 /* ==================== 转封装兼容模式（修复声音异常） ==================== */
