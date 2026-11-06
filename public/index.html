@@ -420,6 +420,21 @@
     }
     .audio-auto input { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; }
 
+    .src-warn-bar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 16px;
+      background: rgba(224, 164, 92, 0.14);
+      border-top: 1px solid rgba(224, 164, 92, 0.4);
+      font-size: 12px;
+      color: #e8c07d;
+      line-height: 1.4;
+    }
+    .src-warn-bar span { flex: 1 1 auto; }
+    .src-warn-bar button { flex: 0 0 auto; padding: 4px 10px; font-size: 12px; }
+
     @keyframes reloadPulse {
       0%, 100% { color: #ffd166; }
       50% { color: var(--accent); }
@@ -823,6 +838,11 @@
       <div class="pv-toast" id="pvToast"></div>
     </div>
 
+    <div class="src-warn-bar" id="srcWarn" style="display:none;">
+      <span id="srcWarnText"></span>
+      <button class="ghost-btn" onclick="playWithExternalPlayer()">用外部播放器播放</button>
+    </div>
+
     <div class="pv-controls" id="pvControls">
       <button class="ctrl-btn" id="btnPlay" onclick="togglePlay()" title="播放/暂停 (空格)"></button>
       <span class="ctrl-time" id="ctrlTime">0:00 / 0:00</span>
@@ -863,6 +883,12 @@
           <input type="checkbox" id="autoReloadChk" onchange="saveAutoReload(this.checked)">
           音频异常时自动重载（默认关；开启后约中断 1~2 秒）
         </label>
+        <label class="audio-auto">
+          <input type="checkbox" id="autoExtChk" onchange="saveAutoExt(this.checked)">
+          问题源自动用外部播放器（默认关；该源封装有缺陷时自动交给 PotPlayer）
+        </label>
+
+
 
         <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
         <div class="source-tabs" id="mAllSources"><span class="src-loading">正在聚合各站点同片源…</span></div>
@@ -2031,8 +2057,15 @@
         fetch(`/api/probe?url=${encodeURIComponent(finalUrl)}`)
           .then(r => r.json())
           .then(d => {
-            if (d && d.disc > 0) {
-              showToast(`该源有 ${d.disc} 处时间戳重置，经过这些位置声音可能异常；卡顿时可点 ⟳ 或换源`, 6000);
+            const disc = d && d.disc ? d.disc : 0;
+            showSourceWarn(disc);
+            if (disc > 0) {
+              if (autoExtEnabled()) {
+                showToast(`该源有 ${disc} 处时间戳重置，已自动交给外部播放器`, 4000);
+                setTimeout(() => playWithExternalPlayer(), 600);
+              } else {
+                showToast(`该源有 ${disc} 处时间戳重置，网页播放可能声音异常；可用外部播放器彻底避免`, 6000);
+              }
             }
           })
           .catch(() => {});
@@ -2343,6 +2376,26 @@
     function initAutoReloadChk() {
       const chk = document.getElementById('autoReloadChk');
       if (chk) chk.checked = autoReloadEnabled();
+      const ext = document.getElementById('autoExtChk');
+      if (ext) ext.checked = autoExtEnabled();
+    }
+
+    /** 问题源是否自动交给外部播放器 */
+    function autoExtEnabled() {
+      try { return localStorage.getItem('tvbox_autoext') === '1'; } catch (e) { return false; }
+    }
+    function saveAutoExt(v) {
+      try { localStorage.setItem('tvbox_autoext', v ? '1' : '0'); } catch (e) {}
+    }
+
+    /** 有问题源时显示提示条 */
+    function showSourceWarn(disc) {
+      const box = document.getElementById('srcWarn');
+      const txt = document.getElementById('srcWarnText');
+      if (!box || !txt) return;
+      if (!disc || disc <= 0) { box.style.display = 'none'; return; }
+      txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
+      box.style.display = 'flex';
     }
 
     /** 高亮 ⟳ 按钮，提示可以手动重载 */
