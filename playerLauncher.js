@@ -75,7 +75,7 @@ const CANDIDATES = [
     ],
     build: (exe, url, title) => ({
       cmd: exe,
-      args: ['-window_title', `TVBox PC - ${title}`, '-autoexit', url]
+      args: ['-window_title', `KimBoxPC - ${title}`, '-autoexit', url]
     })
   }
 ];

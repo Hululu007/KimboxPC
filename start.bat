@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title TVBox PC
+title KimBoxPC
 cd /d "%~dp0"
 
 echo ==================================================
-echo            TVBox PC  (FongMi / TVBox 协议)
+echo            KimBoxPC  (FongMi / TVBox 协议)
 echo ==================================================
 echo.
 
@@ -122,7 +122,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [!!] 检测到已有一个 TVBox PC 服务在后台运行（PID=%OLDPID%）
+echo [!!] 检测到已有一个 KimBoxPC 服务在后台运行（PID=%OLDPID%）
 echo      它可能是之前窗口异常关闭后残留的，会占着数据库。
 echo.
 choice /C YN /N /M "      结束它并重新启动？(Y=重启  N=仅打开页面) "

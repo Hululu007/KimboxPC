@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TVBox PC 版</title>
+  <title>KimBoxPC 版</title>
   <script src="vendor/hls.min.js"></script>
   <style>
     :root {
@@ -701,7 +701,7 @@
   <!-- 顶部固定区：顶栏 + 分类栏 + 列表工具栏 -->
   <div class="topbar" id="topbar">
   <header>
-    <div class="logo">📺 TVBox PC</div>
+    <div class="logo">📺 KimBoxPC</div>
 
     <!-- 配置源管理 -->
     <div class="config-box">
@@ -881,7 +881,7 @@
         const v = await (await fetch('/api/version')).json();
         badge.textContent = 'v' + v.version;
         const started = new Date(v.startedAt);
-        badge.title = `TVBox PC v${v.version}\nNode ${v.node}\n服务启动于 ${started.toLocaleString()}`;
+        badge.title = `KimBoxPC v${v.version}\nNode ${v.node}\n服务启动于 ${started.toLocaleString()}`;
       } catch (e) {
         badge.textContent = 'v?';
         badge.title = '无法读取版本';

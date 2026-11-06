@@ -681,7 +681,7 @@ server.on('listening', async () => {
   writePid();
   const bak = backup('startup');
   console.log('========================================');
-  console.log('TVBox PC 版已就绪！');
+  console.log('KimBoxPC 版已就绪！');
   console.log(`本地界面地址: http://127.0.0.1:${PORT}`);
 
   if (isLanOpen()) {

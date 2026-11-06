@@ -1,4 +1,4 @@
-# TVBox PC 版 (轻量复刻版)
+# KimBoxPC 版 (轻量复刻版)
 
 基于 **FongMi / TVBox** 核心协议理念打造的 Windows PC 桌面端影音播放客户端。
 
@@ -142,7 +142,7 @@ set PORT=8099 && node server.js
 **访问不了的首要原因通常是 Windows 防火墙**，放行一次即可（管理员 PowerShell）：
 
 ```powershell
-netsh advfirewall firewall add rule name="TVBox PC" dir=in action=allow protocol=TCP localport=3980
+netsh advfirewall firewall add rule name="KimBoxPC" dir=in action=allow protocol=TCP localport=3980
 ```
 
 > ⚠️ 开放局域网后，同网段任何人都能打开这个界面并操作（含删除配置源、还原备份）。只建议在家庭/可信网络使用；用完把 `host.txt` 改回 `127.0.0.1` 即可关闭。

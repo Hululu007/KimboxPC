@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title 停止 TVBox PC
+title 停止 KimBoxPC
 cd /d "%~dp0"
 
 echo ==================================================
-echo              停止 TVBox PC 服务
+echo              停止 KimBoxPC 服务
 echo ==================================================
 echo.
 
