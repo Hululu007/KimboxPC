@@ -49,11 +49,47 @@ function loadNative() {
   return native;
 }
 
+/* ---------- 窗口尺寸记忆 ---------- */
+const STATE_FILE = path.join(ROOT, 'data', 'window-state.json');
+const DEFAULT_BOUNDS = { width: 1460, height: 920 };
+
+function loadWindowState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (s && Number(s.width) >= 1024 && Number(s.height) >= 640) {
+      return {
+        width: Math.round(Number(s.width)),
+        height: Math.round(Number(s.height)),
+        x: Number.isFinite(s.x) ? Math.round(s.x) : undefined,
+        y: Number.isFinite(s.y) ? Math.round(s.y) : undefined,
+        maximized: !!s.maximized
+      };
+    }
+  } catch (e) {}
+  return { ...DEFAULT_BOUNDS, maximized: false };
+}
+
+function saveWindowState(win) {
+  try {
+    if (!win || win.isDestroyed()) return;
+    const b = win.getNormalBounds ? win.getNormalBounds() : win.getBounds();
+    const data = {
+      x: b.x, y: b.y,
+      width: b.width, height: b.height,
+      maximized: win.isMaximized()
+    };
+    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {}
+}
+
 /* ---------- 窗口 ---------- */
 function createMainWindow() {
+  const ws = loadWindowState();
   mainWin = new BrowserWindow({
-    width: 1460,
-    height: 920,
+    width: ws.width,
+    height: ws.height,
+    ...(Number.isFinite(ws.x) && Number.isFinite(ws.y) ? { x: ws.x, y: ws.y } : {}),
     minWidth: 1024,
     minHeight: 640,
     backgroundColor: '#0b0d10',
@@ -66,7 +102,23 @@ function createMainWindow() {
     }
   });
   mainWin.setMenuBarVisibility(false);
+  if (ws.maximized) { try { mainWin.maximize(); } catch (e) {} }
+
+  // 尺寸/位置变化后延迟保存，避免拖动时频繁写盘
+  let saveTimer = null;
+  const scheduleSave = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveWindowState(mainWin), 500);
+  };
+  mainWin.on('resize', scheduleSave);
+  mainWin.on('move', scheduleSave);
+  mainWin.on('maximize', scheduleSave);
+  mainWin.on('unmaximize', scheduleSave);
+
   mainWin.loadURL(`http://127.0.0.1:${PORT}/`);
+
+  // 创建后立即落盘当前尺寸：文件存在后，用户可以直接编辑它指定默认大小
+  setTimeout(() => saveWindowState(mainWin), 1000);
   // 全屏状态变化（含 Esc 由系统触发的情况）通知渲染进程
   mainWin.on('enter-full-screen', () => {
     if (!mainWin.isDestroyed()) mainWin.webContents.send('shell:fullscreen-changed', { fullscreen: true });
@@ -74,6 +126,8 @@ function createMainWindow() {
   mainWin.on('leave-full-screen', () => {
     if (!mainWin.isDestroyed()) mainWin.webContents.send('shell:fullscreen-changed', { fullscreen: false });
   });
+
+  mainWin.on('close', () => saveWindowState(mainWin));
 
   mainWin.on('closed', () => {
     mainWin = null;
