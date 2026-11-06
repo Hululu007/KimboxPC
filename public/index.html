@@ -408,6 +408,24 @@
       margin: 8px 0 6px;
     }
 
+    .audio-auto {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 6px 0 2px;
+      user-select: none;
+    }
+    .audio-auto input { width: 13px; height: 13px; accent-color: var(--accent); cursor: pointer; }
+
+    @keyframes reloadPulse {
+      0%, 100% { color: #ffd166; }
+      50% { color: var(--accent); }
+    }
+    .ctrl-btn.alert { animation: reloadPulse 1s ease-in-out infinite; }
+
     /* 全屏：隐藏顶栏与选集面板，控制条浮在画面底部并自动隐藏 */
     .player-view:fullscreen .pv-top,
     .player-view:fullscreen .pv-panel { display: none; }
@@ -840,6 +858,11 @@
         <button class="pv-toggle" id="pvToggleBtn" onclick="togglePanel()">展开 ▾</button>
       </div>
       <div class="pv-panel-body">
+        <label class="audio-auto">
+          <input type="checkbox" id="autoReloadChk" onchange="saveAutoReload(this.checked)">
+          音频异常时自动重载（默认关；开启后约中断 1~2 秒）
+        </label>
+
         <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
         <div class="source-tabs" id="mAllSources"><span class="src-loading">正在聚合各站点同片源…</span></div>
 
@@ -2254,6 +2277,27 @@
     let audioStallCount = 0;
     let lastAutoRecover = 0;
 
+    /** 是否开启「音频异常自动重载」（默认关，避免打断观看） */
+    function autoReloadEnabled() {
+      try { return localStorage.getItem('tvbox_autoreload') === '1'; } catch (e) { return false; }
+    }
+    function saveAutoReload(v) {
+      try { localStorage.setItem('tvbox_autoreload', v ? '1' : '0'); } catch (e) {}
+    }
+    function initAutoReloadChk() {
+      const chk = document.getElementById('autoReloadChk');
+      if (chk) chk.checked = autoReloadEnabled();
+    }
+
+    /** 高亮 ⟳ 按钮，提示可以手动重载 */
+    function highlightReload(ms = 12000) {
+      const btn = document.getElementById('btnReload');
+      if (!btn) return;
+      btn.classList.add('alert');
+      clearTimeout(btn._alertTimer);
+      btn._alertTimer = setTimeout(() => btn.classList.remove('alert'), ms);
+    }
+
     function armAudioWatch() {
       lastAudioBytes = -1;
       audioStallCount = 0;
@@ -2279,11 +2323,23 @@
           if (audioStallCount >= 3) {                                  // 约 9 秒没有新音频数据
             const now = Date.now();
             audioStallCount = 0;
-            if (now - lastAutoRecover > 30000) {                       // 30 秒内只自动恢复一次，避免抖动
-              lastAutoRecover = now;
-              window.__autoRecoverCount = (window.__autoRecoverCount || 0) + 1;
-              showToast('检测到音频异常，正在自动重载…', 3000);
-              reloadCurrentEpisode(true);
+
+            if (autoReloadEnabled()) {
+              // 用户主动开启：自动恢复
+              if (now - lastAutoRecover > 30000) {
+                lastAutoRecover = now;
+                window.__autoRecoverCount = (window.__autoRecoverCount || 0) + 1;
+                showToast('检测到音频异常，正在自动重载…', 3000);
+                reloadCurrentEpisode(true);
+              }
+            } else {
+              // 默认：只提示，不打断观看
+              if (now - lastAutoRecover > 30000) {
+                lastAutoRecover = now;
+                window.__autoHintCount = (window.__autoHintCount || 0) + 1;
+                showToast('音频似乎不太对？点右下角 ⟳ 可重载本集', 4000);
+                highlightReload();
+              }
             }
           }
         } else {
@@ -2293,6 +2349,7 @@
       }, 3000);
     }
 
+    initAutoReloadChk();
     startAudioWatch();
 
     attachSlider(
