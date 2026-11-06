@@ -1593,7 +1593,7 @@
           chip.className = 'source-tab all-src' + (item.siteKey === currentSiteKey ? ' active' : '');
           const ms = item.ms;
           const cls = ms < 1000 ? 'src-fast' : (ms < 2500 ? '' : 'src-slow');
-          chip.title = `${item.siteName}\n线路: ${item.lines.join(' / ')}\n集数: ${item.episodes}\n响应: ${ms}ms`;
+          chip.title = `${item.siteName}\n线路: ${item.lines.join(' / ')}\n集数: ${item.episodes}\n响应: ${ms}ms` + (item.disc ? `\n封装: 有 ${item.disc} 处时间戳重置（可能引起声音异常）` : "");
 
           const n1 = document.createElement('span');
           n1.className = 'src-name';
@@ -1601,7 +1601,8 @@
 
           const n2 = document.createElement('span');
           n2.className = 'src-meta ' + cls;
-          n2.textContent = `${ms}ms · ${item.lines.length} 线路`;
+          const warn = (item.disc && item.disc > 0) ? ` · ⚠${item.disc}` : '';
+          n2.textContent = `${ms}ms · ${item.lines.length} 线路${warn}`;
 
           chip.appendChild(n1);
           chip.appendChild(n2);
@@ -1980,6 +1981,19 @@
           showToast('这个源无法直接播放：' + e.message + '，建议换一个源', 6000);
           return;
         }
+      }
+
+      // 探测该流的封装质量：有 DISCONTINUITY（时间戳重置）时提示一次
+      if (finalUrl.includes('.m3u8') && finalUrl !== window.__probeWarnedUrl) {
+        window.__probeWarnedUrl = finalUrl;
+        fetch(`/api/probe?url=${encodeURIComponent(finalUrl)}`)
+          .then(r => r.json())
+          .then(d => {
+            if (d && d.disc > 0) {
+              showToast(`该源有 ${d.disc} 处时间戳重置，经过这些位置声音可能异常；卡顿时可点 ⟳ 或换源`, 6000);
+            }
+          })
+          .catch(() => {});
       }
 
       const seek = () => {

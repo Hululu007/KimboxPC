@@ -444,6 +444,44 @@ app.get('/api/resolve', async (req, res) => {
   }
 });
 
+/* ==================== 播放列表质量探测 ==================== */
+
+const probeCache = new Map();
+
+/**
+ * 探测 m3u8 的封装质量：跨越 DISCONTINUITY 时时间戳会重置，
+ * hls.js 需要重建时间轴，浏览器音频渲染偶发判错 → 声音变调/发闷。
+ */
+async function probePlaylist(url) {
+  if (!/\.m3u8/i.test(url)) return null;
+  if (probeCache.has(url)) return probeCache.get(url);
+  let res;
+  try {
+    const r = await axios.get(url, {
+      timeout: 12000,
+      responseType: 'text',
+      headers: { 'User-Agent': DESKTOP_UA }
+    });
+    const t = String(r.data || '');
+    res = {
+      disc: (t.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
+      segments: (t.match(/#EXTINF/g) || []).length,
+      multiAudio: (t.match(/#EXT-X-MEDIA:.*TYPE=AUDIO/g) || []).length
+    };
+  } catch (e) {
+    res = { error: e.message };
+  }
+  probeCache.set(url, res);
+  if (probeCache.size > 500) probeCache.delete(probeCache.keys().next().value);
+  return res;
+}
+
+app.get('/api/probe', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  res.json(await probePlaylist(url) || {});
+});
+
 /* ==================== 同片源聚合（按延迟排序） ==================== */
 
 const sourceCache = new Map(); // name -> { at, data }
@@ -485,6 +523,13 @@ app.get('/api/sources', async (req, res) => {
         const d = await withTimeout(CmsEngine.getDetail({ api: site.api }, match.vod_id), TIMEOUT);
         if (!d || !d.playSources || d.playSources.length === 0) continue;
 
+        // 顺带探测这条源首集的封装质量（有 discontinuity 的源更容易出现声音异常）
+        let probe = null;
+        try {
+          const firstUrl = d.playSources[0].episodes[0].url;
+          probe = await probePlaylist(firstUrl);
+        } catch (e) {}
+
         results.push({
           siteKey: site.key,
           siteName: site.name,
@@ -493,6 +538,7 @@ app.get('/api/sources', async (req, res) => {
           pic: match.vod_pic || '',
           lines: d.playSources.map(p => p.sourceName),
           episodes: d.playSources.reduce((m, p) => Math.max(m, (p.episodes || []).length), 0),
+          disc: probe ? probe.disc : null,
           ms: Date.now() - t0
         });
       } catch (e) {
