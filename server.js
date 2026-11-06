@@ -119,7 +119,8 @@ async function applyConfig(row) {
   state.configId = row.id;
   state.url = row.url;
   state.sites = parsed.sites || [];
-  state.activeSite = state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+  const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
+  state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
   ConfigRepo.touch(row.id);
   return state;
 }
@@ -219,10 +220,29 @@ app.post('/api/config/load', async (req, res) => {
 });
 
 app.get('/api/sites', (req, res) => {
+  const row = state.configId ? ConfigRepo.get(state.configId) : null;
   res.json({
     sites: state.sites.map(publicSite),
-    activeSite: state.activeSite ? state.activeSite.key : null
+    activeSite: state.activeSite ? state.activeSite.key : null,
+    defaultSite: row ? row.default_site : ''
   });
+});
+
+// 设置当前配置源的默认站点
+app.post('/api/site/default', (req, res) => {
+  const siteKey = String((req.body && req.body.siteKey) || '');
+  if (!state.configId) return res.status(400).json({ error: '尚未加载配置源' });
+  if (!state.sites.some(s => s.key === siteKey)) return res.status(404).json({ error: '站点不存在' });
+  ConfigRepo.setDefaultSite(state.configId, siteKey);
+  state.activeSite = state.sites.find(s => s.key === siteKey);
+  res.json({ success: true, defaultSite: siteKey });
+});
+
+// 清除默认站点（恢复「第一个可用站点」）
+app.delete('/api/site/default', (req, res) => {
+  if (!state.configId) return res.status(400).json({ error: '尚未加载配置源' });
+  ConfigRepo.setDefaultSite(state.configId, '');
+  res.json({ success: true });
 });
 
 app.post('/api/site/select', (req, res) => {

@@ -20,7 +20,8 @@ function openDb() {
     url          TEXT NOT NULL UNIQUE,
     name         TEXT NOT NULL DEFAULT '',
     created_at   INTEGER NOT NULL,
-    last_used_at INTEGER NOT NULL DEFAULT 0
+    last_used_at INTEGER NOT NULL DEFAULT 0,
+    default_site TEXT NOT NULL DEFAULT ''
   );
 
   CREATE TABLE IF NOT EXISTS history (
@@ -53,7 +54,18 @@ function openDb() {
   `);
 }
 
+// 旧库迁移：补齐后加的列
+function migrate() {
+  try {
+    const cols = db.prepare('PRAGMA table_info(config)').all().map(c => c.name);
+    if (!cols.includes('default_site')) {
+      db.exec("ALTER TABLE config ADD COLUMN default_site TEXT NOT NULL DEFAULT ''");
+    }
+  } catch (e) {}
+}
+
 openDb();
+migrate();
 
 const now = () => Date.now();
 
@@ -84,6 +96,10 @@ const ConfigRepo = {
   },
   remove(id) {
     db.prepare('DELETE FROM config WHERE id = ?').run(id);
+  },
+  setDefaultSite(id, siteKey) {
+    db.prepare('UPDATE config SET default_site = ? WHERE id = ?').run(siteKey || '', id);
+    return this.get(id);
   },
   clear() {
     db.prepare('DELETE FROM config').run();
@@ -267,6 +283,7 @@ function restoreBackup(name) {
   fs.copyFileSync(full, DB_PATH);
 
   openDb();
+  migrate();
   return { restored: name, stats: countAll() };
 }
 

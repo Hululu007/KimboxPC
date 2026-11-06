@@ -731,10 +731,11 @@
     </div>
 
     <!-- 站点切换 -->
-    <div style="min-width: 150px;">
-      <select id="siteSelect" onchange="switchSite()">
+    <div style="min-width: 150px; display: flex; gap: 6px; align-items: center;">
+      <select id="siteSelect" onchange="switchSite()" title="当前站点">
         <option value="">(未加载站点)</option>
       </select>
+      <button class="ghost-btn" id="btnDefaultSite" onclick="setDefaultSite()" title="把当前站点设为默认">设为默认</button>
     </div>
 
     <!-- 搜索 -->
@@ -972,6 +973,7 @@
         showStatus('还没有可用的配置源。点击顶部「＋ 添加」输入 TVBox / FongMi 配置地址。');
         return;
       }
+      window.__defaultSite = data.defaultSite || '';
       fillSiteSelect(data.sites, data.activeSite);
       loadHome();
     }
@@ -994,6 +996,46 @@
       if (pick) {
         select.value = pick;
         activeSiteKey = pick;
+      }
+      updateDefaultSiteUI();
+    }
+
+    /** 标记下拉里哪个是默认站点，并更新按钮文案 */
+    function updateDefaultSiteUI() {
+      const sel = document.getElementById('siteSelect');
+      const btn = document.getElementById('btnDefaultSite');
+      if (!sel || !btn) return;
+      const def = window.__defaultSite || '';
+      [...sel.options].forEach(o => {
+        const base = o.dataset.base || o.textContent;
+        o.dataset.base = base;
+        o.textContent = (def && o.value === def) ? '★ ' + base.replace(/^★ /, '') : base.replace(/^★ /, '');
+      });
+      if (def && sel.value === def) {
+        btn.textContent = '★ 已是默认';
+        btn.title = '当前站点已是默认，启动时会自动使用';
+      } else {
+        btn.textContent = '设为默认';
+        btn.title = '把当前站点设为默认';
+      }
+    }
+
+    async function setDefaultSite() {
+      const key = document.getElementById('siteSelect').value;
+      if (!key) return alert('请先选择站点');
+      try {
+        const r = await fetch('/api/site/default', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteKey: key })
+        });
+        const d = await r.json();
+        if (d.error) return alert(d.error);
+        window.__defaultSite = key;
+        updateDefaultSiteUI();
+        showToast('已设为默认站点，下次启动自动使用', 2500);
+      } catch (e) {
+        alert('设置失败: ' + e.message);
       }
     }
 
