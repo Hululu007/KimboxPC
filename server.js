@@ -522,9 +522,23 @@ app.delete('/api/favorites/:siteKey/:vodId', (req, res) => {
 
 const PKG = require('./package.json');
 
+/** 读取 更新.md 里最新的版本号，用于校验 package.json 是否忘记同步 */
+function latestChangelogVersion() {
+  try {
+    const md = fs.readFileSync(path.join(__dirname, '更新.md'), 'utf8');
+    const m = md.match(/^##\s*\[([0-9]+\.[0-9]+\.[0-9]+)\]/m);
+    return m ? m[1] : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 app.get('/api/version', (req, res) => {
+  const cl = latestChangelogVersion();
   res.json({
     version: PKG.version,
+    changelogVersion: cl,
+    versionMismatch: !!cl && cl !== PKG.version,
     name: PKG.name,
     startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     node: process.versions.node
@@ -639,6 +653,13 @@ server.on('listening', async () => {
     console.log('尚未添加配置源，请在界面中点击「＋ 添加」。');
   }
   if (bak && bak.file) console.log('已自动备份数据: data/backups/' + bak.file);
+
+  const clVersion = latestChangelogVersion();
+  if (clVersion && clVersion !== PKG.version) {
+    console.log(`[!] 版本号不一致：package.json=${PKG.version}，更新.md=${clVersion}`);
+    console.log(`    发布前请把 package.json 的 version 改成 ${clVersion}`);
+  }
+
   console.log('========================================');
 });
 

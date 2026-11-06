@@ -63,11 +63,11 @@
       flex: 0 0 auto;
       padding: 2px 8px;
       border-radius: 10px;
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
+      background: rgba(34, 211, 238, 0.12);
+      border: 1px solid rgba(34, 211, 238, 0.45);
+      color: #5eead4;
       font-size: 11px;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0;
       cursor: default;
       user-select: all;
@@ -81,8 +81,8 @@
       align-items: center;
     }
 
-    .config-box { flex: 1; max-width: 450px; }
-    .search-box { flex: 1; max-width: 320px; }
+    .config-box { flex: 0 1 auto; min-width: 260px; max-width: 450px; }
+    .search-box { flex: 1 1 auto; min-width: 140px; max-width: 320px; }
 
     input, select {
       background: var(--card-bg);
@@ -121,7 +121,7 @@
     }
     button.ghost-btn:hover { background: #3a2226; }
 
-    select#configSelect { flex: 1 1 auto; min-width: 0; }
+    select#configSelect { flex: 1 1 auto; min-width: 170px; }
 
     /* 分类标签栏 */
     .tabs-bar {
@@ -709,7 +709,7 @@
       <button onclick="addConfig()" title="添加配置源">＋ 添加</button>
       <button class="ghost-btn" onclick="openConfigManager()" title="管理配置源（可单独删除）">管理</button>
       <button class="ghost-btn" onclick="openBackupPanel()" title="备份与还原">备份</button>
-      <button class="ghost-btn" onclick="resetAll()" title="初始化：清空所有配置源、收藏与历史">⟲</button>
+      <button class="ghost-btn" onclick="resetAll()" title="初始化：清空所有配置源、收藏与历史">初始化</button>
     </div>
 
     <!-- 站点切换 -->
