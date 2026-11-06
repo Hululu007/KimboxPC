@@ -921,8 +921,8 @@
       <div class="pv-spacer"></div>
       <span class="engine-label">引擎</span>
       <select class="ctrl-rate engine-sel" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
-        <option value="browser">浏览器</option>
         <option value="mpv">mpv</option>
+        <option value="browser">浏览器</option>
       </select>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
       <button class="secondary" onclick="toggleFullscreen()">⛶ 全屏 (F)</button>
@@ -996,10 +996,10 @@
 
 
 
-        <div class="row-label">播放引擎（mpv 内核解码更稳，拖动即时）：</div>
+        <div class="row-label">播放引擎（默认 mpv 内核；浏览器作为备用）：</div>
         <div class="source-tabs" id="engineBtns">
-          <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">浏览器（内置）</div>
           <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（推荐）</div>
+          <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">浏览器（备用）</div>
         </div>
 
         <div class="row-label" id="trackRowLabel" style="display:none;">字幕 / 音轨（mpv 模式）：</div>
@@ -1793,7 +1793,12 @@
     let mpvTimer = null;
 
     function engineMode() {
-      try { return localStorage.getItem('tvbox_engine') || 'browser'; } catch (e) { return 'browser'; }
+      try {
+        const v = localStorage.getItem('tvbox_engine');
+        if (v) return v;
+      } catch (e) {}
+      // 未设置时：桌面版默认 mpv 内核，浏览器版默认浏览器引擎
+      return (window.kimbox && window.kimbox.isElectron) ? 'mpv' : 'browser';
     }
     function isMpv() { return engineMode() === 'mpv'; }
 
