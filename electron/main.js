@@ -86,9 +86,11 @@ function saveWindowState(win) {
 /* ---------- 窗口 ---------- */
 function createMainWindow() {
   const ws = loadWindowState();
+  const appIcon = path.join(ROOT, 'icon.ico');
   mainWin = new BrowserWindow({
     width: ws.width,
     height: ws.height,
+    ...(fs.existsSync(appIcon) ? { icon: appIcon } : {}),
     ...(Number.isFinite(ws.x) && Number.isFinite(ws.y) ? { x: ws.x, y: ws.y } : {}),
     minWidth: 1024,
     minHeight: 640,
@@ -363,6 +365,7 @@ ipcMain.handle('mpv:resize', (evt, { width, height }) => {
 });
 
 /* ---------- 启动 ---------- */
+app.setAppUserModelId('KimBoxPC');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 app.whenReady().then(() => {

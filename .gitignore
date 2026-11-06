@@ -29,3 +29,6 @@ Thumbs.db
 desktop.ini
 native/lib/
 native/build/
+
+# 快捷方式（含绝对路径，换机器请用「创建快捷方式.bat」重建）
+*.lnk
