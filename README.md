@@ -29,13 +29,16 @@
 - 播放内核 = **libmpv 原生渲染**（画面经内存缓冲送到页面 `<canvas>`，不是独立播放器窗口）
 - 音频由 libmpv 直接输出，**完全绕开浏览器 MSE**，不会出现变调/发闷
 - 依赖：`node_modules/electron`、`native/lib/libmpv-2.dll`、`native/build/Release/mpv_native.node`
-- 重新编译原生模块（Electron 升级后需要，需系统装有 Node.js）：
+- 重新编译原生模块（Electron 升级后需要，**不需要装 Node.js**）：
 
 ```bat
-npm run build:native
+tools\编译原生模块.bat
 ```
 
-- 启动器会在原生模块缺失时自动尝试编译；编译需要 Visual Studio C++ 生成工具与 Python
+> 原理：设置 `ELECTRON_RUN_AS_NODE=1` 后用 `electron.exe` 直接跑 `node-gyp`，
+> 因此无需另装 Node.js（仍需 Visual Studio C++ 生成工具与 Python 提供编译器）。
+
+- 启动器会在原生模块缺失时自动用同样方式编译
 
 ## 🎯 核心特性
 
@@ -64,7 +67,7 @@ npm run build:native
 | **Electron 运行库** | ✅ 必需 | `node_modules\electron\`（约 358 MB），已随项目提供 |
 | **libmpv 原生模块** | ✅ 必需 | `native\lib\libmpv-2.dll` + `native\build\Release\mpv_native.node`（约 116 MB） |
 | **随附 ffmpeg** | ⚪ 备用 | `ffmpeg\ffmpeg.exe`（约 100 MB）；「兼容模式」转封装用，缺失时回退系统 ffmpeg |
-| Node.js（系统安装） | 🔵 可选 | 仅「重编译原生模块」或 `npm run build:native` 时需要 |
+| Node.js（系统安装） | ❌ 不需要 | 编译原生模块也走 Electron 内置 Node（`tools/编译原生模块.bat`） |
 | hls.js / mpegts.js | ⚪ 已内置 | 放在 `public/vendor/`，不依赖 CDN |
 | PotPlayer / VLC / mpv | 🔵 可选 | 只有点「用 PC 播放器播放」时才需要；没有也不影响应用内播放 |
 | Python / Java / Android SDK | ❌ 不需要 | 本项目纯 Node + 原生模块实现 |
