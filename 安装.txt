@@ -1,4 +1,2 @@
-1.解压运行start.bat
-2.第一次运行会跳出一个node授权,选是.
-3.关掉start.bat再启动会自动打开浏览器进入播放页面.
-4.使用过程start.bat不可以关掉,可以缩小.
+1.解压ttvbox-pc_v3.7.0.zip,运行KimBoxPC-桌面版.bat
+2.第一次运行会跳出一个node授权,选允许.

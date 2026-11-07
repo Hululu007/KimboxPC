@@ -595,6 +595,43 @@
     }
 
     /* ===== 配置源管理面板 ===== */
+    .ask-mask {
+      position: fixed;
+      inset: 0;
+      z-index: 500;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .ask-mask.show { display: flex; }
+    .ask-panel {
+      width: 100%;
+      max-width: 520px;
+      background: #1b1f24;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 18px 14px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    }
+    .ask-title { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .ask-hint { font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; }
+    .ask-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      font-size: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #12161b;
+      color: var(--text);
+      outline: none;
+    }
+    .ask-input:focus { border-color: var(--accent); }
+    .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
     .cfg-mask {
       position: fixed;
       inset: 0;
@@ -1197,8 +1234,52 @@
       }
     }
 
+    /* ==================== 应用内输入弹窗 ==================== */
+    // Electron 不支持 window.prompt()，需要输入的地方统一走这里
+    let askResolve = null;
+
+    function askText(title, hint, placeholder) {
+      return new Promise((resolve) => {
+        askResolve = resolve;
+        const mask = document.getElementById('askMask');
+        const input = document.getElementById('askInput');
+        document.getElementById('askTitle').textContent = title || '请输入';
+        document.getElementById('askHint').textContent = hint || '';
+        input.value = '';
+        input.placeholder = placeholder || '';
+        mask.classList.add('show');
+        setTimeout(() => input.focus(), 50);
+      });
+    }
+
+    function askOk() {
+      const input = document.getElementById('askInput');
+      const v = input ? input.value.trim() : '';
+      document.getElementById('askMask').classList.remove('show');
+      const r = askResolve; askResolve = null;
+      if (r) r(v);
+    }
+
+    function askCancel() {
+      document.getElementById('askMask').classList.remove('show');
+      const r = askResolve; askResolve = null;
+      if (r) r(null);
+    }
+
+    // 回车确认、Esc 取消
+    document.addEventListener('keydown', (e) => {
+      const mask = document.getElementById('askMask');
+      if (!mask || !mask.classList.contains('show')) return;
+      if (e.key === 'Enter') { e.preventDefault(); askOk(); }
+      else if (e.key === 'Escape') { e.preventDefault(); askCancel(); }
+    });
+
     async function addConfig() {
-      const url = prompt('请输入 TVBox / FongMi 配置源地址\n（支持 http/https 链接，也支持本地 .json 文件路径）');
+      const url = await askText(
+        '添加配置源',
+        '支持 http/https 链接，也支持本地 .json 文件路径',
+        'https://example.com/my.json'
+      );
       if (!url) return;
       showStatus('正在添加配置源...');
       try {
@@ -3382,5 +3463,18 @@
       msg.textContent = text;
     }
   </script>
+  <!-- 通用输入弹窗（Electron 不支持 prompt()，统一用它） -->
+  <div class="ask-mask" id="askMask">
+    <div class="ask-panel">
+      <div class="ask-title" id="askTitle">请输入</div>
+      <div class="ask-hint" id="askHint"></div>
+      <input type="text" class="ask-input" id="askInput" autocomplete="off" spellcheck="false">
+      <div class="ask-actions">
+        <button class="ghost-btn" id="askCancelBtn" onclick="askCancel()">取消</button>
+        <button class="primary-btn" id="askOkBtn" onclick="askOk()">确定</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
