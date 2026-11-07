@@ -883,7 +883,7 @@
       <select id="siteSelect" onchange="switchSite()" title="当前站点">
         <option value="">(未加载站点)</option>
       </select>
-      <button class="ghost-btn" id="btnDefaultSite" onclick="setDefaultSite()" title="把当前站点设为默认">设为默认</button>
+      <button class="ghost-btn" id="btnDefaultSite" onclick="setDefaultSite()" title="把当前站点设为默认">☆ 设为默认</button>
     </div>
 
     <!-- 搜索 -->
@@ -1208,15 +1208,34 @@
       });
       if (def && sel.value === def) {
         btn.textContent = '★ 已是默认';
-        btn.title = '当前站点已是默认，启动时会自动使用';
+        btn.title = '点击可取消默认（取消后启动时使用第一个可用站点）';
+        btn.dataset.isDefault = '1';
       } else {
-        btn.textContent = '设为默认';
+        btn.textContent = '☆ 设为默认';
         btn.title = '把当前站点设为默认';
+        btn.dataset.isDefault = '0';
       }
     }
 
     async function setDefaultSite() {
       const key = document.getElementById('siteSelect').value;
+      const btn = document.getElementById('btnDefaultSite');
+      const isDefault = btn && btn.dataset.isDefault === '1';
+
+      // 已经是默认 → 点击取消
+      if (isDefault) {
+        if (!confirm('取消当前默认站点？\n取消后，启动时自动使用第一个可用站点。')) return;
+        try {
+          await fetch('/api/site/default', { method: 'DELETE' });
+          window.__defaultSite = '';
+          updateDefaultSiteUI();
+          showToast('已取消默认站点', 2000);
+        } catch (e) {
+          showToast('取消失败：' + e.message, 3000);
+        }
+        return;
+      }
+
       if (!key) return alert('请先选择站点');
       try {
         const r = await fetch('/api/site/default', {
