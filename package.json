@@ -1,6 +1,6 @@
 {
   "name": "kimboxpc",
-  "version": "3.8.3",
+  "version": "3.8.4",
   "description": "KimBoxPC - 基于 TVBox / FongMi 协议的 Windows PC 播放客户端",
   "main": "electron/main.js",
   "scripts": {

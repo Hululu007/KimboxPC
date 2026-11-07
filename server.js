@@ -517,7 +517,7 @@ const probeCache = new Map();
  * 探测 m3u8 的封装质量：跨越 DISCONTINUITY 时时间戳会重置，
  * hls.js 需要重建时间轴，浏览器音频渲染偶发判错 → 声音变调/发闷。
  */
-async function probePlaylist(url) {
+async function probePlaylist(url, depth = 0) {
   if (!/\.m3u8/i.test(url)) return null;
   if (probeCache.has(url)) return probeCache.get(url);
   let res;
@@ -528,6 +528,35 @@ async function probePlaylist(url) {
       headers: { 'User-Agent': DESKTOP_UA }
     });
     const t = String(r.data || '');
+
+    // 主播放列表（master playlist）：没有 #EXTINF，需要下钻到具体码率的子列表
+    if (depth < 3 && /#EXT-X-STREAM-INF/i.test(t) && !/#EXTINF/i.test(t)) {
+      const lines = t.split(/\r?\n/);
+      let variant = '';
+      for (let i = 0; i < lines.length; i++) {
+        if (!/^#EXT-X-STREAM-INF/i.test(lines[i])) continue;
+        for (let j = i + 1; j < lines.length; j++) {
+          const l = lines[j].trim();
+          if (!l || l.startsWith('#')) continue;
+          variant = l;
+          break;
+        }
+        if (variant) break;
+      }
+      if (variant) {
+        let abs;
+        try { abs = new URL(variant, url).href; } catch (e) { abs = ''; }
+        if (abs) {
+          const sub = await probePlaylist(abs, depth + 1);
+          if (sub && !sub.error) {
+            sub.master = true;
+            probeCache.set(url, sub);
+            return sub;
+          }
+        }
+      }
+    }
+
     const infs = [...t.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
     res = {
       disc: (t.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
