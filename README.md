@@ -191,3 +191,20 @@ node server.js
 | GET/POST/DELETE | `/api/history` | 播放历史 |
 | GET/POST | `/api/favorites`、`/api/favorites/toggle` | 收藏 |
 | POST | `/api/play/external` | 唤起本地播放器 |
+
+### 兼容模式（转封装）的资源占用
+
+转封装用 `ffmpeg -c copy`，**不重新编码**，所以 CPU 占用天然很低。
+如果仍想进一步压低，可用环境变量调节（启动前设置，或写进系统环境变量）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `REMUX_MAX` | `2` | 同时最多几路转封装（1~6）。同一时间只会播一个流，拖进度时会短暂出现第二路 |
+| `REMUX_PRIORITY` | `below_normal` | ffmpeg 进程优先级：`idle` / `below_normal` / `normal` |
+| `REMUX_THREADS` | `auto` | 传给 ffmpeg 的 `-threads`。**对 `-c copy` 基本无影响**（没有编解码线程可分配） |
+
+当前生效的配置可在 `GET /api/remux/status` 查看：
+
+```json
+{ "active": 1, "max": 2, "threads": "auto", "priority": "below_normal" }
+```

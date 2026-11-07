@@ -456,10 +456,21 @@ function findFfmpeg() {
 }
 
 const remuxSessions = new Set();
-const REMUX_MAX = 3;
+
+// 转封装是 -c copy（不编解码），线程数对 CPU 影响很小；
+// 真正省 CPU 的是「限制并发」+「降低进程优先级」。
+const REMUX_MAX = Math.max(1, Math.min(6, Number(process.env.REMUX_MAX) || 2));
+// 0 = 不传 -threads（跟随 ffmpeg 默认）；设成 1 可再压一点占用
+const REMUX_THREADS = Math.max(0, Math.min(16, Number(process.env.REMUX_THREADS) || 0));
+// "idle" | "below_normal"（默认）| "normal"
+const REMUX_PRIORITY = String(process.env.REMUX_PRIORITY || 'below_normal').toLowerCase();
 
 app.get('/api/remux/status', (req, res) => {
-  res.json({ available: !!findFfmpeg(), ffmpeg: findFfmpeg(), active: remuxSessions.size, max: REMUX_MAX });
+  res.json({
+    available: !!findFfmpeg(), ffmpeg: findFfmpeg(),
+    active: remuxSessions.size, max: REMUX_MAX,
+    threads: REMUX_THREADS || 'auto', priority: REMUX_PRIORITY
+  });
 });
 
 app.get('/api/remux', (req, res) => {
@@ -480,6 +491,7 @@ app.get('/api/remux', (req, res) => {
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3',
     ...(start > 0 ? ['-ss', String(start)] : []),
     '-i', url,
+    ...(REMUX_THREADS > 0 ? ['-threads', String(REMUX_THREADS)] : []),
     '-c', 'copy', '-fflags', '+genpts',
     '-muxdelay', '0', '-muxpreload', '0',
     '-f', 'mpegts', 'pipe:1'
@@ -493,6 +505,17 @@ app.get('/api/remux', (req, res) => {
   }
 
   remuxSessions.add(proc);
+
+  // 降低 ffmpeg 优先级，避免抢占播放/界面所需的 CPU
+  try {
+    const prioMap = {
+      idle: os.constants.priority.PRIORITY_IDLE,
+      below_normal: os.constants.priority.PRIORITY_BELOW_NORMAL,
+      normal: os.constants.priority.PRIORITY_NORMAL
+    };
+    const target = prioMap[REMUX_PRIORITY];
+    if (proc.pid && target !== undefined) os.setPriority(proc.pid, target);
+  } catch (e) {}
   res.setHeader('Content-Type', 'video/mp2t');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Connection', 'close');
