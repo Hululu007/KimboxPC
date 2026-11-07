@@ -4,8 +4,6 @@ npm-debug.log*
 yarn-error.log*
 
 # 本地安装包（体积大，按需自行放置）
-node-v*-win-x64/
-node/
 ffmpeg/
 Setup/
 

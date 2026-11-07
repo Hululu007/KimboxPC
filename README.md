@@ -16,25 +16,27 @@
 > **`ffmpeg/` 是刻意保留的备用件，请勿删除。**
 > 它承担两个用途：① 浏览器版的「兼容模式」（服务端转封装，修复时间戳重置导致的音频异常）；
 > ② mpv 内核出问题时的兜底方案。桌面版主用 mpv 时用不到它，但删掉会失去兜底能力。
-## 两种启动方式
+## 启动方式
 
-| 入口 | 界面 | 播放内核 | 适合 |
-|---|---|---|---|
-| `start.bat` | 系统浏览器（可局域网访问） | Chrome MSE / 兼容模式 / 外部播放器 | 平时使用、多设备访问 |
-| `KimBoxPC-桌面版.bat` | Electron 独立窗口 | **libmpv 原生渲染**（画面嵌在应用内） | 追剧，声音最稳 |
+**只有一种：桌面版**（生产环境）。
 
-### 桌面版（Electron + libmpv）
+| 入口 | 说明 |
+|---|---|
+| `KimBoxPC 桌面版.lnk` | 首选，带自定义图标，不弹黑框 |
+| `KimBoxPC-桌面版.bat` | 同一程序的命令行入口，排查问题时用 |
 
-- 画面由 libmpv 解码后经内存缓冲送到页面 `<canvas>`，**不是独立播放器窗口**
+- 界面窗口 = Electron 独立窗口（Electron 内置 Node 24，无需另装 Node.js）
+- 播放内核 = **libmpv 原生渲染**（画面经内存缓冲送到页面 `<canvas>`，不是独立播放器窗口）
 - 音频由 libmpv 直接输出，**完全绕开浏览器 MSE**，不会出现变调/发闷
 - 依赖：`node_modules/electron`、`native/lib/libmpv-2.dll`、`native/build/Release/mpv_native.node`
-- 重新编译原生模块（Electron 升级后需要）：
+- 重新编译原生模块（Electron 升级后需要，需系统装有 Node.js）：
 
 ```bat
 npm run build:native
 ```
 
 - 启动器会在原生模块缺失时自动尝试编译；编译需要 Visual Studio C++ 生成工具与 Python
+
 ## 🎯 核心特性
 
 - **多配置源**：可保存任意多个 TVBox / FongMi 配置地址，随时切换；启动时自动恢复上次使用的源。
@@ -54,30 +56,21 @@ npm run build:native
 
 ## 📦 运行需要什么
 
+**桌面版是免安装的**：把整个目录拷到任意 Windows 电脑，双击 `KimBoxPC 桌面版.lnk` 即可，
+**不需要装 Node.js**（Electron 内置 Node 24.22.2）。
+
 | 项目 | 是否必需 | 说明 |
 |---|---|---|
-| **随附便携版 Node**（推荐） | ⚪ 免安装 | 把官方 `node-vXX-win-x64` 解压到项目根目录即可，`start.bat` 会**优先使用它**并加到 PATH 最前面——不装系统 Node、不弹 UAC、版本固定 |
-| **随附 ffmpeg**（兼容模式用） | ⚪ 免安装 | `ffmpeg\ffmpeg.exe`（约 100 MB）；「兼容模式」转封装需要它，缺失时自动回退到系统安装的 ffmpeg |
-| **Node.js 22.5+**（推荐 24） | ✅ 备选 | 没放便携版时使用系统已安装的 Node；[nodejs.org](https://nodejs.org) 下载 LTS 版 |
-| 本地 Node 安装包（可选） | ⚪ 免手动 | 把 `node-*-x64.msi` 放进 `Setup/`，都没检测到时**静默安装**（会弹一次 UAC） |
-| npm 依赖（express / axios / cors） | ⚪ 自动 | 首次双击 `start.bat` 会自动 `npm install`（需联网一次），之后离线可跑 |
-| hls.js | ⚪ 已内置 | 已放在 `public/vendor/hls.min.js`，不再依赖 CDN |
-| ffplay / mpv / PotPlayer / VLC | 🔵 可选 | 只有点「用 PC 播放器播放」时才需要；没有也不影响网页内播放 |
-| Python / Java / Android SDK | ❌ 不需要 | 本项目纯 Node 实现 |
+| **Electron 运行库** | ✅ 必需 | `node_modules\electron\`（约 358 MB），已随项目提供 |
+| **libmpv 原生模块** | ✅ 必需 | `native\lib\libmpv-2.dll` + `native\build\Release\mpv_native.node`（约 116 MB） |
+| **随附 ffmpeg** | ⚪ 备用 | `ffmpeg\ffmpeg.exe`（约 100 MB）；「兼容模式」转封装用，缺失时回退系统 ffmpeg |
+| Node.js（系统安装） | 🔵 可选 | 仅「重编译原生模块」或 `npm run build:native` 时需要 |
+| hls.js / mpegts.js | ⚪ 已内置 | 放在 `public/vendor/`，不依赖 CDN |
+| PotPlayer / VLC / mpv | 🔵 可选 | 只有点「用 PC 播放器播放」时才需要；没有也不影响应用内播放 |
+| Python / Java / Android SDK | ❌ 不需要 | 本项目纯 Node + 原生模块实现 |
 
-**启动时的 Node 查找顺序**：
+---
 
-```
-随附便携版（node-v*-win-x64\node.exe）+ 加到 PATH 最前
-  ↓ 没有
-系统已安装的 node（PATH 中）
-  ↓ 没有
-Setup\node-*.msi 静默安装（弹一次 UAC）
-  ↓ 都没有
-提示手动安装
-```
-
-**装好 Node 之后，双击 `start.bat` 就能跑。**
 
 ---
 
@@ -85,42 +78,30 @@ Setup\node-*.msi 静默安装（弹一次 UAC）
 
 整个目录就是绿色版，**复制到任何位置都能直接用**（已实测含空格与中文的路径，如 `D:\我的 工具\tvbox-pc`）：
 
-- 必须一起带走：`node-v24.22.2-win-x64/`（便携 Node）、`node_modules/`（依赖）、`public/`、所有 `.js`、`start.bat`、`stop.bat`
-- 兼容模式还需要：`ffmpeg/ffmpeg.exe`（随附，约 100 MB；不带则兼容模式不可用，普通播放不受影响）
-- 可选：`data/`（你的配置源、收藏、观看记录——想保留就从旧目录拷过来）
-- 不需要：`.git/`、`Setup/`
-- 目标机器**无需安装 Node**，也无需管理员权限
+- 必须一起带走：`node_modules/`（含 electron）、`native/`（libmpv + 原生模块）、`public/`、所有 `.js`、`electron/`、`icon.ico`、`KimBoxPC-桌面版.bat`
+- 备用件：`ffmpeg/`（兼容模式转封装用，约 100 MB）
+- 可选：`data/`（配置源、收藏、观看记录——想保留就从旧目录拷过来）
+- 不需要：`.git/`
+- 目标机器**无需安装 Node.js**（Electron 内置 Node 24），也无需管理员权限
 
-复制后双击 `start.bat` 即可，`data/` 会在新位置自动重建。
+复制后双击 `KimBoxPC-桌面版.bat`（或重建的快捷方式）即可，`data/` 会在新位置自动重建。
 
-`start.bat` 启动时会自动检查：Node 是否存在 → 版本是否 ≥ 22.5 → `node:sqlite` 是否可用 → `node_modules` 是否存在（缺失则自动安装）。任何一步失败都会给出中文提示，不会一闪而过。
-
-也可以命令行启动：
-
-```bash
-npm install        # 仅首次
-npm start          # 或 node server.js
-set PORT=8080 && node server.js   # 自定义端口（默认 3980）
-```
-
-> 想把整个目录拷到别的电脑：连 `node_modules` 一起复制就不用再联网安装（约 5.7 MB），只要那台机器有 Node.js。
+> 换机器后快捷方式里的绝对路径会失效，双击 **`创建快捷方式.bat`** 重建一次即可。
 
 ---
 
 ## 🚀 启动与使用
 
-1. 双击运行 **`start.bat`**。
-2. 浏览器自动打开 `http://127.0.0.1:3980`。
-3. 点顶部 **「＋ 添加」** 粘贴配置源地址（如 `https://ok.4247701.xyz/my.json`），之后可在下拉框随时切换。
+1. 双击 **`KimBoxPC 桌面版.lnk`**（或 `KimBoxPC-桌面版.bat`）。
+2. 应用窗口打开，界面即主页面。
+3. 点顶部 **「＋ 添加」** 粘贴配置源地址，之后可在下拉框随时切换。
 4. 顶部标签栏：**首页推荐 / ⭐收藏 / 🕘历史 / 各分类**。
+5. 播放页默认用 **mpv 内核**；遇到问题可在面板里切「浏览器（备用）」。
 
-### 停止服务
+### 退出
 
-- **关掉 `start.bat` 的黑色窗口** = 停止服务（服务会监控父窗口，3 秒内自动退出）；
-- 或者双击 **`stop.bat`**，按 `data/.server.pid` 精确结束进程；
-- 停止后 `data/tvbox.db` 才会解锁，**压缩备份前必须先停服务**。
-
-> 若 `start.bat` 提示「已有一个服务在后台运行」，选 `Y` 可以直接结束旧进程并重启。
+- 关闭应用窗口即退出（mpv 进程会一并结束）。
+- 若异常残留，在任务管理器结束 `electron.exe` / `mpv.exe` 即可。
 
 ### 换端口（端口冲突时）
 
@@ -130,47 +111,11 @@ set PORT=8080 && node server.js   # 自定义端口（默认 3980）
 8099
 ```
 
-然后重新双击 `start.bat`。浏览器地址、健康检查、内部服务都会自动跟随。
+然后重新打开应用即可（桌面版会读取 `port.txt`，界面地址随之改变）。
 
-优先级：**环境变量 `PORT` > `port.txt` > 默认 3980**。临时测试也可以不改文件：
-
-```bash
-set PORT=8099 && node server.js
-```
+优先级：**环境变量 `PORT` > `port.txt` > 默认 3980**。
 
 > 只有一行数字，别加引号或空格；内容非法时会自动回退到 3980 并提示。
-
-### 局域网访问（其它电脑/手机也能看）
-
-默认只监听 `127.0.0.1`，也就是**只有本机能访问**。要让局域网内其它设备访问，编辑根目录的 **`host.txt`**：
-
-```
-0.0.0.0
-```
-
-保存后重新双击 `start.bat`，控制台会直接打印出可用的局域网地址，例如：
-
-```
-本地界面地址: http://127.0.0.1:3980
-监听地址: 0.0.0.0:3980（已开放局域网访问）
-局域网地址: http://10.10.10.200:3980
-```
-
-其它电脑/平板/手机在浏览器里打开 `http://10.10.10.200:3980` 即可（把 IP 换成你实际的）。
-
-| `host.txt` 的值 | 效果 |
-|---|---|
-| `127.0.0.1`（默认） | 仅本机可访问 |
-| `0.0.0.0` | 所有网卡监听，局域网可访问 |
-| `192.168.x.x` 等具体 IP | 只监听该网卡 |
-
-**访问不了的首要原因通常是 Windows 防火墙**，放行一次即可（管理员 PowerShell）：
-
-```powershell
-netsh advfirewall firewall add rule name="KimBoxPC" dir=in action=allow protocol=TCP localport=3980
-```
-
-> ⚠️ 开放局域网后，同网段任何人都能打开这个界面并操作（含删除配置源、还原备份）。只建议在家庭/可信网络使用；用完把 `host.txt` 改回 `127.0.0.1` 即可关闭。
 
 ---
 

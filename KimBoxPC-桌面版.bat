@@ -13,7 +13,11 @@ if not exist "node_modules\electron\dist\electron.exe" (
 if not exist "native\build\Release\mpv_native.node" (
   echo [提示] 原生模块尚未编译，尝试自动编译...
   pushd native
-  ..\node-v24.22.2-win-x64\node.exe ..\node_modules\node-gyp\bin\node-gyp.js rebuild --target=45.2.3 --dist-url=https://electronjs.org/headers --arch=x64
+  where node >nul 2>nul && (
+    node ..\node_modules\node-gyp\bin\node-gyp.js rebuild --target=45.2.3 --dist-url=https://electronjs.org/headers --arch=x64
+  ) || (
+    echo [提示] 未找到 node.exe，无法自动编译；请安装 Node.js 后重试
+  )
   popd
   if not exist "native\build\Release\mpv_native.node" (
     echo [错误] 编译失败，将无法使用 mpv 内核

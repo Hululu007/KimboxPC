@@ -10,45 +10,8 @@ const PlayerLauncher = require('./playerLauncher');
 const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
 
 const app = express();
-// 监听地址（是否允许局域网访问）：环境变量 HOST > host.txt > 127.0.0.1
-function readHost() {
-  const pick = (v) => {
-    const s = String(v || '').trim();
-    if (!s) return null;
-    if (/^(localhost|0\.0\.0\.0|::)$/i.test(s)) return s === '0.0.0.0' ? '0.0.0.0' : s;
-    // 合法 IPv4 / 主机名
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s) || /^[A-Za-z0-9.-]+$/.test(s)) return s;
-    return null;
-  };
-  const fromEnv = pick(process.env.HOST);
-  if (fromEnv) return fromEnv;
-  try {
-    const raw = fs.readFileSync(path.join(__dirname, 'host.txt'), 'utf8').trim().split(/\r?\n/)[0];
-    const fromFile = pick(raw);
-    if (fromFile) return fromFile;
-  } catch (e) {}
-  return '127.0.0.1';
-}
-const HOST = readHost();
-
-/** 是否对外网开放（非纯回环） */
-function isLanOpen() {
-  return !(HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1');
-}
-
-/** 列出本机局域网 IPv4 地址 */
-function lanAddresses() {
-  const out = [];
-  try {
-    const nets = os.networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const ni of nets[name] || []) {
-        if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address);
-      }
-    }
-  } catch (e) {}
-  return out;
-}
+// 仅监听本机回环（桌面版专用，不再支持局域网访问）
+const HOST = '127.0.0.1';
 
 // 端口：环境变量 PORT > port.txt > 3980
 function readPort() {
@@ -734,8 +697,6 @@ app.get('/api/version', (req, res) => {
     versionMismatch: !!cl && cl !== PKG.version,
     name: PKG.name,
     host: HOST,
-    lanOpen: isLanOpen(),
-    lanUrls: lanAddresses().map((ip) => 'http://' + ip + ':' + PORT),
     startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     node: process.versions.node
   });
@@ -836,18 +797,8 @@ server.on('listening', async () => {
   console.log('KimBoxPC 版已就绪！');
   console.log(`本地界面地址: http://127.0.0.1:${PORT}`);
 
-  if (isLanOpen()) {
-    const ips = lanAddresses();
-    console.log(`监听地址: ${HOST}:${PORT}（已开放局域网访问）`);
-    if (ips.length) {
-      ips.forEach(ip => console.log(`局域网地址: http://${ip}:${PORT}`));
-    } else {
-      console.log('未检测到局域网 IP，请检查网络连接。');
-    }
-    console.log('提示: 其它设备访问不了时，请放行 Windows 防火墙（见 README）。');
-  } else {
-    console.log('监听地址: 127.0.0.1（仅本机可访问；要开放局域网请把 host.txt 改成 0.0.0.0）');
-  }
+  console.log('监听地址: 127.0.0.1（仅本机可访问）');
+
 
   // 启动时自动恢复上次使用的配置源
   const saved = ConfigRepo.list();
