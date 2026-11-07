@@ -13,6 +13,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo 提示：把 KimBoxPC 桌面版.lnk 拖到桌面或任务栏即可固定
 timeout /t 4 >nul
 exit /b 0
