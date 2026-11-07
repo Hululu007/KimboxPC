@@ -5,7 +5,18 @@
 $ErrorActionPreference = 'Stop'
 
 $root  = Split-Path -Parent $PSScriptRoot
-$ver   = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+# 显式按 UTF-8 读取：Windows PowerShell 5.1 的 Get-Content 默认按 ANSI/GBK 解码，
+# 会把 package.json 里的中文读成乱码并破坏 JSON 结构
+$pkgPath = Join-Path $root 'package.json'
+$ver = ''
+try {
+    $pkgText = [System.IO.File]::ReadAllText($pkgPath, [System.Text.Encoding]::UTF8)
+    $ver = ($pkgText | ConvertFrom-Json).version
+} catch {
+    $m = [regex]::Match([System.IO.File]::ReadAllText($pkgPath, [System.Text.Encoding]::UTF8), '"version"\s*:\s*"([^"]+)"')
+    if ($m.Success) { $ver = $m.Groups[1].Value }
+}
+if (-not $ver) { Write-Host '[错误] 无法从 package.json 读取版本号' -ForegroundColor Red; exit 1 }
 $out   = Join-Path (Split-Path -Parent $root) "KimBoxPC_v$ver.zip"
 $stage = Join-Path $env:TEMP "KimBoxPC_pkg_$ver"
 $pkgDir = Join-Path $stage 'KimBoxPC'
@@ -40,11 +51,21 @@ foreach ($m in $must) {
   }
 }
 
-# 3) 压缩
+# 3) 压缩（手动逐条写入，确保路径分隔符是 / —— ZIP 规范要求，跨工具兼容）
 if (Test-Path $out) { Remove-Item -Force $out }
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[System.IO.Compression.ZipFile]::CreateFromDirectory(
-  $pkgDir, $out, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+$level = [System.IO.Compression.CompressionLevel]::Optimal
+$zip = [System.IO.Compression.ZipFile]::Open($out, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    $baseLen = $pkgDir.Length + 1
+    Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($baseLen).Replace('\', '/')
+        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, "KimBoxPC/$rel", $level)
+    }
+} finally {
+    $zip.Dispose()
+}
 
 # 4) 收尾
 Remove-Item -Recurse -Force $stage
