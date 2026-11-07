@@ -1036,7 +1036,7 @@
         <div id="compatOptions">
           <label class="audio-auto">
             <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
-            兼容模式：服务端转封装（默认开启，修复声音异常；拖动约需 2~3 秒）
+            兼容模式：仅在脏流时转封装（默认开启；干净流直连，拖动秒级）
           </label>
           <label class="audio-auto">
             <input type="checkbox" id="autoNextChk" onchange="saveAutoNext(this.checked)">
@@ -1897,6 +1897,29 @@
       }
 
       return card;
+    }
+
+    /* ---------- 播放列表探测（带缓存，用于决定是否需要转封装） ---------- */
+    const probeMemo = new Map();
+
+    async function probeQuick(url, timeoutMs = 6000) {
+      if (!url) return null;
+      if (probeMemo.has(url)) return probeMemo.get(url);
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}`, { signal: ctrl.signal });
+        clearTimeout(timer);
+        const d = await r.json();
+        if (d && d.duration) compat.duration = d.duration;
+        probeMemo.set(url, d);
+        if (probeMemo.size > 60) probeMemo.delete(probeMemo.keys().next().value);
+        return d;
+      } catch (e) {
+        // 探测失败就当干净流处理，保证能正常起播
+        probeMemo.set(url, null);
+        return null;
+      }
     }
 
     /** 探测播放列表封装质量：记录时长、显示提示条、必要时建议换用外部播放器 */
@@ -2833,11 +2856,20 @@
       await stopMpvPlayback();   // 从 mpv 切回浏览器时，先停掉 mpv，避免两路同时出声
       setTimeout(updateVolumeUI, 300);
 
-      // 兼容模式：改走服务端转封装，彻底规避时间戳重置导致的音频异常
+      // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
+      // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
       if (compatEnabled() && finalUrl.includes('.m3u8')) {
-        playCompat(finalUrl, resumeAt || 0);
-        probeAndWarn(finalUrl, true);
-        return;
+        const info = await probeQuick(finalUrl);
+        if (info && info.disc > 0) {
+          playCompat(finalUrl, resumeAt || 0);
+          probeAndWarn(finalUrl, true);
+          // 转封装的拖动要重启 ffmpeg（实测 10~16 秒），提示可换更快的内核
+          if (!window.__dirtyHintShown) {
+            window.__dirtyHintShown = true;
+            showToast('该源存在时间戳重置，已自动转封装以保证声音正常；拖动较慢，追求流畅可在面板切「mpv 内核」', 6000);
+          }
+          return;
+        }
       }
       destroyCompat();
       probeAndWarn(finalUrl, false);
