@@ -602,15 +602,13 @@ app.get('/api/probe', async (req, res) => {
   // filter=1：返回「广告过滤后」的统计，用于界面提示「已过滤 N 处插播」
   if (String(req.query.filter) === '1') {
     try {
-      const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
-      const f = filterAdChunks(text, finalUrl);
-      const infs = [...f.text.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
+      const r = await getFilteredPlaylist(url);
       return res.json({
-        disc: (f.text.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
-        segments: infs.length,
-        duration: Math.round(infs.reduce((a, b) => a + b, 0)),
-        adRemoved: f.removed,
-        totalChunks: f.totalChunks
+        disc: r.disc,
+        segments: r.segments,
+        duration: r.duration,
+        adRemoved: r.removed,
+        totalChunks: r.totalChunks
       });
     } catch (e) {
       return res.json({ error: e.message });
@@ -747,13 +745,43 @@ async function fetchPlaylistMaybeMaster(url) {
   return { text, finalUrl: url };
 }
 
+// 过滤结果缓存：一次请求同时服务 /api/playlist 和 /api/probe?filter=1，
+// 避免播放器为了拿时长又把上千个分片的列表再拉一遍（首集会等很久）
+const filteredCache = new Map();
+const FILTERED_TTL = 5 * 60 * 1000;
+
+async function getFilteredPlaylist(url) {
+  const hit = filteredCache.get(url);
+  if (hit && Date.now() - hit.ts < FILTERED_TTL) return hit;
+  const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+  const f = filterAdChunks(text, finalUrl);
+  const infs = [...f.text.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
+  const out = {
+    text: f.text,
+    removed: f.removed,
+    totalChunks: f.totalChunks,
+    skipped: !!f.skipped,
+    disc: (f.text.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
+    segments: infs.length,
+    duration: Math.round(infs.reduce((a, b) => a + b, 0)),
+    finalUrl,
+    ts: Date.now()
+  };
+  filteredCache.set(url, out);
+  if (filteredCache.size > 60) filteredCache.delete(filteredCache.keys().next().value);
+  return out;
+}
+
 app.get('/api/playlist', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!url) return res.status(400).json({ error: '缺少 url 参数' });
   try {
-    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
-    const r = filterAdChunks(text, finalUrl);
-    if (r.removed > 0) console.log(`[广告过滤] 剔除 ${r.removed} 个插播块（共 ${r.totalChunks} 块）: ${finalUrl.slice(-50)}`);
+    const r = await getFilteredPlaylist(url);
+    if (r.removed > 0) {
+      console.log(`[广告过滤] 剔除 ${r.removed}/${r.totalChunks} 块: ${String(r.finalUrl).slice(-50)}`);
+    } else if (r.skipped) {
+      console.log(`[广告过滤] 跳过（${r.totalChunks} 块，判定为整集切片而非插播）: ${String(r.finalUrl).slice(-50)}`);
+    }
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Cache-Control', 'no-store');
     res.send(r.text);

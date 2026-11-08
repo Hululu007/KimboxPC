@@ -2949,7 +2949,7 @@
       let playUrl = finalUrl;
       let adInfo = null;
       if (/\.m3u8/i.test(finalUrl)) {
-        adInfo = await probeQuick(finalUrl, 12000, true);
+        adInfo = await probeQuick(finalUrl, 20000, true);
         // 必须是绝对地址：mpv 拿到相对路径会当成本地文件打开而失败
         playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}`;
         if (adInfo && adInfo.adRemoved > 0) {
@@ -2970,7 +2970,16 @@
       // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
       if (compatEnabled() && playUrl.includes('/api/playlist')) {
-        const info = adInfo || await probeQuick(finalUrl, 12000, true);
+        // 过滤探测偶尔会慢（要拉上千个分片），若失败就退回普通探测：
+        // 宁可拿不到广告数，也不能让脏流漏掉转封装（否则声音会出问题）
+        let info = adInfo;
+        if (!info) {
+          info = await probeQuick(finalUrl, 20000, true);
+        }
+        if (!info || info.disc === undefined) {
+          info = await probeQuick(finalUrl, 8000, false);
+          if (info && info.duration) compat.duration = info.duration;
+        }
         if (info && info.disc > 0) {
           playCompat(playUrl, resumeAt || 0);
           probeAndWarn(finalUrl, true);
