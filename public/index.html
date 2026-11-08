@@ -1179,7 +1179,12 @@
         const opt = document.createElement('option');
         opt.value = String(c.id);
         // 站点数量用实时值（站点被删会跟着变），不再用添加时写死的字符串
-        const label = c.name || c.url;
+        let label = c.name;
+        if (!label) {
+          // 没起名字时显示主机名，短一些（本地路径则截断）
+          try { label = new URL(c.url).hostname; }
+          catch (e) { label = String(c.url || '').slice(0, 40); }
+        }
         opt.textContent = (c.siteCount > 0) ? `${label} · ${c.siteCount}站` : label;
         if (data.current && data.current.id === c.id) opt.selected = true;
         sel.appendChild(opt);
@@ -1337,10 +1342,10 @@
 
     /**
      * 通用输入弹窗。
-     * 传 second（{ placeholder }）时多显示一个输入框，
-     * 确定后返回 { value, value2 }；不传则照旧返回字符串。
+     * second（{ placeholder }）→ 多显示一个输入框，返回 { value, value2 }
+     * 否则返回字符串；prefill 用于预填第一个输入框。
      */
-    function askText(title, hint, placeholder, second) {
+    function askText(title, hint, placeholder, second, prefill) {
       return new Promise((resolve) => {
         askResolve = resolve;
         const mask = document.getElementById('askMask');
@@ -1348,7 +1353,7 @@
         const input2 = document.getElementById('askInput2');
         document.getElementById('askTitle').textContent = title || '请输入';
         document.getElementById('askHint').textContent = hint || '';
-        input.value = '';
+        input.value = prefill || '';
         input.placeholder = placeholder || '';
         if (second) {
           input2.style.display = '';
@@ -1360,7 +1365,7 @@
         }
         window.__askSecond = !!second;
         mask.classList.add('show');
-        setTimeout(() => input.focus(), 50);
+        setTimeout(() => { input.focus(); if (prefill) input.select(); }, 50);
       });
     }
 
@@ -1599,13 +1604,14 @@
         renameBtn.className = 'secondary';
         renameBtn.textContent = '改名';
         renameBtn.onclick = async () => {
-          const v = await askText('重命名配置源', '这个名字会显示在顶部下拉里，可用中文', c.name || c.url, { placeholder: '新名称' });
-          if (!v || !v.value) return;
+          // 单输入框 + 预填当前名称；直接返回字符串
+          const v = await askText('重命名配置源', '这个名字会显示在顶部下拉里，可用中文', '新的名称', null, c.name || '');
+          if (!v || !v.trim()) return;
           try {
             const r = await fetch(`/api/configs/${c.id}/rename`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ name: v.value })
+              body: JSON.stringify({ name: v.trim() })
             });
             const d = await r.json();
             if (d.error) throw new Error(d.error);
