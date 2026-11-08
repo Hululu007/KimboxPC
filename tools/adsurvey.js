@@ -17,7 +17,7 @@ const path = require('path');
 
 const API = 'http://127.0.0.1:3980';
 const OUT = path.join(__dirname, '..', '广告检测报告.md');
-const CONCURRENCY = 4;
+const CONCURRENCY = 2;
 
 async function api(p, params = {}) {
   const r = await axios.get(`${API}${p}`, { params, timeout: 60000 });
@@ -26,8 +26,12 @@ async function api(p, params = {}) {
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function classify(p) {
-  if (!p || p.error) return 'error';
+function classify(p, errMsg) {
+  if (!p || (p.error && p.error !== undefined && p.duration === undefined)) {
+    const m = String(errMsg || (p && p.error) || '');
+    if (/40[34]|ENOTFOUND|ECONNREFUSED|timeout|aborted/i.test(m)) return 'blocked';
+    return 'error';
+  }
   const chunks = p.totalChunks || 0;
   const removed = p.adRemoved || 0;
   if (p.adRemoved === undefined && p.disc === 0) return 'clean';
@@ -66,9 +70,23 @@ async function surveySite(site) {
     row.sample = pick.vod_name;
 
     const detail = await api('/api/detail', { id: vodId, siteKey });
-    const src = (detail && detail.playSources || [])[0];
-    if (!src || !src.episodes || !src.episodes.length) { row.type = 'nodata'; return row; }
-    let url = src.episodes[0].url;
+    const sources = (detail && detail.playSources) || [];
+    if (!sources.length) { row.type = 'nodata'; return row; }
+
+    // 每条线路都看一眼：优先取直接就是 m3u8 的那条（很多站的第 1 条是网页壳）
+    let url = '';
+    let picked = '';
+    const flat = [];
+    for (const s of sources) {
+      for (const ep of (s.episodes || []).slice(0, 2)) {
+        if (ep && ep.url) flat.push({ line: s.sourceName, url: ep.url });
+      }
+    }
+    const direct = flat.find(x => /\.m3u8/i.test(x.url));
+    if (direct) { url = direct.url; picked = direct.line; }
+    else if (flat.length) { url = flat[0].url; picked = flat[0].line; }
+    if (!url) { row.type = 'nodata'; return row; }
+    row.line = picked;
     let resolvedFrom = '';
     if (!/\.m3u8/i.test(url)) {
       // 网页地址：先解析出真实播放地址
@@ -79,9 +97,14 @@ async function surveySite(site) {
       if (!/\.m3u8/i.test(url)) { row.type = 'nom3u8'; row.note = url.slice(0, 50); return row; }
     }
 
-    const p = await api('/api/probe', { url, filter: 1 });
+    let p = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      p = await api('/api/probe', { url, filter: 1 });
+      if (p && p.duration !== undefined) break;
+      await sleep(2000);
+    }
     if (resolvedFrom) row.resolved = true;
-    row.type = classify(p);
+    row.type = classify(p, p && p.error);
     row.note = `duration=${p.duration}s chunks=${p.totalChunks} disc=${p.disc} ad=${p.adRemoved}`;
     return row;
   } catch (e) {
@@ -112,7 +135,7 @@ async function runPool(items, worker, limit) {
 
   const rows = await runPool(sites, surveySite, CONCURRENCY);
 
-  const order = { insert: 0, clean: 1, chopped: 2, other: 3, nom3u8: 4, nodata: 5, error: 6 };
+  const order = { insert: 0, clean: 1, chopped: 2, other: 3, nom3u8: 4, blocked: 5, nodata: 6, error: 7 };
   rows.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
 
   const label = {
@@ -121,6 +144,7 @@ async function runPool(items, worker, limit) {
     chopped: '整集切片',
     other: '其它',
     nom3u8: '非 HLS（需解析）',
+    blocked: '媒体域名被拦',
     nodata: '无数据',
     error: '探测失败'
   };

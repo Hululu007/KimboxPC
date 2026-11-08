@@ -2722,6 +2722,13 @@
       if (h && h.source) {
         const idx = currentDetail.playSources.findIndex(s => s.sourceName === h.source);
         if (idx >= 0) currentSourceIdx = idx;
+      } else {
+        // 默认线路优先选「地址直接是 m3u8」的：不少站的第一条是网页壳，
+        // 而网页地址经常 404 / 需要额外解析，直链更稳
+        const idx = currentDetail.playSources.findIndex(
+          s => s.episodes && s.episodes.length && /\.m3u8/i.test(s.episodes[0].url)
+        );
+        if (idx >= 0) currentSourceIdx = idx;
       }
 
       currentDetail.playSources.forEach((src, idx) => {
