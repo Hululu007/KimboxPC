@@ -660,24 +660,45 @@ function toAbsolute(line, base) {
 }
 
 /**
- * 返回 { text, removed, keptChunks, totalChunks }
+ * 返回 { text, removed, keptChunks, totalChunks, skipped }
+ *
+ * 插播广告的特征是「一大段正片 → 短广告块 → 一大段正片」，
+ * 即短块的左右相邻块都明显更长。
+ * 而有些源会把整集切成几十个 20~30 秒的块（块间都有 discontinuity），
+ * 那种情况绝不能当广告删，否则整集会被删空。
+ *
  * 剔除规则（保守）：
  *  - 只处理「非首、非尾」的块
- *  - 时长在 5~120 秒之间，且至少 1 个分片
- *  - 最多剔除 12 个块，避免误伤整部剧
+ *  - 块时长 5~120 秒，且至少 1 个分片
+ *  - 左右相邻块都必须是长正片（> 180 秒）
+ *  - 命中块数不超过总块数 25%，且最多 12 个
+ *  - 过滤后总时长不得低于原始的 50%
  */
 function filterAdChunks(text, baseUrl) {
   const chunks = splitByDiscontinuity(text);
   if (chunks.length < 3) return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length };
 
   const infos = chunks.map(chunkInfo);
+  const totalDur = infos.reduce((a, b) => a + b.dur, 0);
   const isAd = new Array(chunks.length).fill(false);
+
   let removed = 0;
-  for (let i = 1; i < chunks.length - 1 && removed < 12; i++) {
+  for (let i = 1; i < chunks.length - 1; i++) {
     const { dur, segs } = infos[i];
-    if (segs > 0 && dur >= 5 && dur <= 120) { isAd[i] = true; removed++; }
+    if (!(segs > 0 && dur >= 5 && dur <= 120)) continue;
+    const left = infos[i - 1], right = infos[i + 1];
+    if (!(left.segs > 0 && left.dur > 180)) continue;
+    if (!(right.segs > 0 && right.dur > 180)) continue;
+    isAd[i] = true;
+    removed++;
   }
-  if (removed === 0) return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length };
+
+  const adDur = infos.reduce((a, b, i) => (isAd[i] ? a + b.dur : a), 0);
+  // 块数少时（如 9 块里夹着 3 段广告）比例规则会误判，只在块数较多时才看比例
+  const tooMany = removed > 12 || (chunks.length >= 20 && removed > chunks.length * 0.25);
+  if (removed === 0 || tooMany || (totalDur - adDur) < totalDur * 0.5) {
+    return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length, skipped: true };
+  }
 
   // 重建：第 0 块保留原样（含头部标签），后续保留块之间补回 discontinuity
   const out = [];
