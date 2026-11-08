@@ -346,7 +346,7 @@ ipcMain.handle('shell:info', () => {
 
 ipcMain.handle('mpv:open', (evt, payload) => {
   try {
-    const { url, title, start, width, height } = payload || {};
+    const { url, title, start, width, height, cacheSecs } = payload || {};
     console.log('[mpv:open]', JSON.stringify({ start, width, height, url: String(url).slice(-40) }));
     if (!url) return { error: '缺少 url' };
 
@@ -361,6 +361,16 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     if (title) {
       try { native.setProp(i, 'force-media-title', title); } catch (e) {}
     }
+    // 缓冲档位：用户可在界面上选 15 / 30 / 60 / 120 秒
+    try {
+      const secs = Math.max(5, Math.min(180, Number(cacheSecs) || 30));
+      native.setProp(i, 'cache-secs', String(secs));
+      // 前向缓存按秒数换算成字节上限（按 ~8Mbps 估算，留足余量）
+      const maxBytes = Math.round(secs * 8 * 1024 * 1024 / 8 * 1.2);
+      native.setProp(i, 'demuxer-max-bytes', String(maxBytes));
+      native.setProp(i, 'demuxer-max-back-bytes', String(Math.round(maxBytes / 2)));
+    } catch (e) {}
+
     // 续播定位用 start 选项（loadfile 的第 4 个参数在 IPC 里不接受字符串，会报 invalid parameter）
     const s = Math.floor(Number(start) || 0);
     if (s > 0) native.setProp(i, 'start', String(s));
@@ -433,7 +443,9 @@ ipcMain.handle('mpv:state', () => {
     height: Number(p('height') || 0),
     videoBitrate: Number(p('video-bitrate') || 0),   // bit/s，未知为 0
     cacheSpeed: Number(p('cache-speed') || 0),       // byte/s，未知为 0
-    speed: Number(p('speed') || 1)                   // 播放倍速
+    speed: Number(p('speed') || 1),                  // 播放倍速
+    cacheSecs: Number(p('cache-secs') || 0),         // 缓存设置（秒）
+    cacheDuration: Number(p('demuxer-cache-duration') || 0)  // 当前已缓冲秒数
   };
 });
 

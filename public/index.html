@@ -1139,6 +1139,15 @@
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
             拦截插播广告（默认开启；按区间自动跳过）
           </label>
+          <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢">
+            缓冲
+            <select id="cacheSel" class="ctrl-rate" onchange="saveCacheLevel(this.value)" style="width:auto">
+              <option value="15">小（15 秒）</option>
+              <option value="30" selected>中（30 秒）</option>
+              <option value="60">大（60 秒）</option>
+              <option value="120">超大（120 秒）</option>
+            </select>
+          </label>
         </div>
 
 
@@ -2420,7 +2429,8 @@
         bindMpvFrames();
 
         const d = await window.kimbox.open({
-          url, title, start: Math.max(0, Math.floor(startAt || 0)), width: w, height: h
+          url, title, start: Math.max(0, Math.floor(startAt || 0)), width: w, height: h,
+          cacheSecs: cacheSecs()
         });
         if (d && d.error) {
           showToast('mpv 启动失败：' + d.error, 5000);
@@ -2460,6 +2470,8 @@
           mpvState.videoBitrate = s.videoBitrate || 0;
           mpvState.cacheSpeed = s.cacheSpeed || 0;
           mpvState.speed = s.speed || 1;
+          mpvState.cacheSecs = s.cacheSecs || 0;
+          mpvState.cacheDuration = s.cacheDuration || 0;
           if (typeof s.volume === 'number') { mpvState.volume = s.volume; updateVolumeUI(); }
           if ((s.position || 0) > 5) sawProgress = true;
           mpvState.ended = !!s.ended;
@@ -2793,6 +2805,7 @@
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
+      syncCacheUI();
       // 应用画面比例（记住上次选择）
       setTimeout(applyRatio, 60);
 
@@ -3079,6 +3092,24 @@
       showToast(on ? '已开启广告拦截（重新打开该集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
     }
 
+    /* ---------- 缓冲档位 ----------
+       影响 mpv 的 cache-secs 与 hls.js 的 maxBufferLength。
+       网络差就调大（牺牲起播速度换稳定），网络好可以调小。 */
+    function cacheSecs() {
+      try {
+        const v = Number(localStorage.getItem('tvbox_cache') || 30);
+        return [15, 30, 60, 120].includes(v) ? v : 30;
+      } catch (e) { return 30; }
+    }
+    function saveCacheLevel(v) {
+      try { localStorage.setItem('tvbox_cache', String(v)); } catch (e) {}
+      showToast(`缓冲已设为 ${v} 秒（重新打开该集生效）`, 2500);
+    }
+    function syncCacheUI() {
+      const el = document.getElementById('cacheSel');
+      if (el) el.value = String(cacheSecs());
+    }
+
     /* ---------- 画面比例（原画 / 16:9 / 4:3 / 填充 / 裁剪） ----------
        全部用 CSS 缩放实现，mpv 与浏览器引擎通用，不改变解码。 */
     function currentRatio() {
@@ -3178,8 +3209,22 @@
       if (t1) t1.style.whiteSpace = 'pre';
       if (t2) t2.textContent = new Date().toLocaleTimeString();
       if (t3) t3.textContent = `${fmtTime(pos)} / ${dur > 0 ? fmtTime(dur) : '--:--'}`;
-      if (t4) t4.textContent = [fmtSpeed(speed), rate && Math.abs(rate - 1) > 0.01 ? rate.toFixed(2) + 'x' : '']
-        .filter(Boolean).join('  ');
+      // 已缓冲秒数（网络卡不卡一眼可见）
+      let buffered = 0;
+      if (isMpv()) {
+        buffered = mpvState.cacheDuration || 0;
+      } else {
+        try {
+          const b = pvVideo.buffered;
+          if (b && b.length) buffered = Math.max(0, b.end(b.length - 1) - (pvVideo.currentTime || 0));
+        } catch (e) {}
+      }
+
+      if (t4) t4.textContent = [
+        fmtSpeed(speed),
+        buffered > 0 ? '缓冲 ' + buffered.toFixed(1) + 's' : '',
+        rate && Math.abs(rate - 1) > 0.01 ? rate.toFixed(2) + 'x' : ''
+      ].filter(Boolean).join('  ');
     }
 
     /* ---------- 播放中跳过广告 ---------- */
@@ -3333,8 +3378,8 @@
       if (finalUrl.includes('.m3u8')) {
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           hls = new Hls({
-            maxBufferLength: 30,
-            maxMaxBufferLength: 60,
+            maxBufferLength: cacheSecs(),
+            maxMaxBufferLength: cacheSecs() * 2,
             backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
             enableWorker: true,
             maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
