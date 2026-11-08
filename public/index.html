@@ -831,18 +831,23 @@
     .pv-osd span {
       position: absolute;
       color: #fff;
-      font-size: 13px;
-      line-height: 1.35;
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
-      background: rgba(0, 0, 0, 0.45);
-      padding: 3px 8px;
-      border-radius: 4px;
+      font-size: 17px;              /* 字号加大 */
+      font-weight: 500;
+      line-height: 1.4;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+      background: rgba(0, 0, 0, 0.5);
+      padding: 4px 11px;
+      border-radius: 5px;
       white-space: nowrap;
     }
-    .pv-osd .osd-tl { top: 12px; left: 14px; text-align: left; }
-    .pv-osd .osd-tr { top: 12px; right: 14px; }
-    .pv-osd .osd-bl { bottom: 70px; left: 14px; }
-    .pv-osd .osd-br { bottom: 70px; right: 14px; }
+    .pv-osd .osd-tl { top: 14px; left: 16px; text-align: left; }
+    .pv-osd .osd-tr { top: 14px; right: 16px; }
+    /* 底部两项再往下贴一些 */
+    .pv-osd .osd-bl { bottom: 26px; left: 16px; }
+    .pv-osd .osd-br { bottom: 26px; right: 16px; }
+    @media (max-width: 1100px) {
+      .pv-osd span { font-size: 15px; padding: 3px 9px; }
+    }
 
     .pv-toast {
       position: absolute;
