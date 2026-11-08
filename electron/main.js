@@ -427,7 +427,13 @@ ipcMain.handle('mpv:state', () => {
     idle: idleNow,
     idle: !!p('idle-active'),
     fps: frameCount,
-    title: p('media-title') || ''
+    title: p('media-title') || '',
+    // 画面信息（供右上角信息层显示）
+    width: Number(p('width') || 0),
+    height: Number(p('height') || 0),
+    videoBitrate: Number(p('video-bitrate') || 0),   // bit/s，未知为 0
+    cacheSpeed: Number(p('cache-speed') || 0),       // byte/s，未知为 0
+    speed: Number(p('speed') || 1)                   // 播放倍速
   };
 });
 

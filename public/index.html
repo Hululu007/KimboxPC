@@ -795,6 +795,32 @@
       margin-top: 10px;
     }
 
+    /* ===== 信息层（OSD）：左上角标题/分辨率，右上角时钟，左下角进度，右下角速度 ===== */
+    .pv-osd {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 30;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      display: none;
+    }
+    .pv-osd.show { display: block; }
+    .pv-osd span {
+      position: absolute;
+      color: #fff;
+      font-size: 13px;
+      line-height: 1.35;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+      background: rgba(0, 0, 0, 0.45);
+      padding: 3px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+    .pv-osd .osd-tl { top: 12px; left: 14px; text-align: left; }
+    .pv-osd .osd-tr { top: 12px; right: 14px; }
+    .pv-osd .osd-bl { bottom: 70px; left: 14px; }
+    .pv-osd .osd-br { bottom: 70px; right: 14px; }
+
     .pv-toast {
       position: absolute;
       left: 50%;
@@ -991,6 +1017,12 @@
     </div>
 
     <div class="pv-stage" id="pvStage">
+      <div class="pv-osd" id="pvOsd">
+        <span class="osd-tl" id="osdTitle"></span>
+        <span class="osd-tr" id="osdClock"></span>
+        <span class="osd-bl" id="osdTime"></span>
+        <span class="osd-br" id="osdSpeed"></span>
+      </div>
       <video id="h5Player" playsinline></video>
       <canvas id="mpvCanvas"></canvas>
       <div class="pv-toast" id="pvToast"></div>
@@ -1041,6 +1073,7 @@
         <option value="2">2.0x</option>
       </select>
       <button class="ctrl-btn" id="btnReload" onclick="reloadCurrentEpisode()" title="重载当前集（音频异常时点这里）"></button>
+      <button class="ctrl-btn" id="btnOsd" onclick="toggleOsd()" title="信息层 (i)">ⓘ</button>
       <button class="ctrl-btn" id="btnFull" onclick="toggleFullscreen()" title="全屏 (F)"></button>
     </div>
 
@@ -1094,7 +1127,7 @@
         <div class="episodes-grid" id="mEpisodes"></div>
 
         <div class="pv-desc" id="mDesc"></div>
-        <div class="pv-tips">快捷键：空格 播放/暂停 · ←/→ 快退/快进 10 秒 · ↑/↓ 音量 · F 全屏 · Esc 返回</div>
+        <div class="pv-tips">快捷键：空格 播放/暂停 · ←/→ 快退/快进 10 秒 · ↑/↓ 音量 · F 全屏 · I 信息层 · Esc 返回</div>
       </div>
     </div>
   </div>
@@ -2374,6 +2407,12 @@
         mpvState.position = newPos;
           mpvState.duration = s.duration || 0;
           mpvState.title = s.title || '';
+          // 信息层需要的额外字段
+          mpvState.width = s.width || 0;
+          mpvState.height = s.height || 0;
+          mpvState.videoBitrate = s.videoBitrate || 0;
+          mpvState.cacheSpeed = s.cacheSpeed || 0;
+          mpvState.speed = s.speed || 1;
           if (typeof s.volume === 'number') { mpvState.volume = s.volume; updateVolumeUI(); }
           if ((s.position || 0) > 5) sawProgress = true;
           mpvState.ended = !!s.ended;
@@ -2707,6 +2746,11 @@
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
+      // 恢复信息层（OSD）显示状态
+      {
+        const o = document.getElementById('pvOsd');
+        if (o) o.classList.toggle('show', osdEnabled());
+      }
       document.body.style.overflow = 'hidden';
       updateVolumeUI();
       document.getElementById('mTitle').textContent = '加载中...';
@@ -2983,6 +3027,60 @@
       try { localStorage.setItem('tvbox_adfilter', on ? '1' : '0'); } catch (e) {}
       syncAdFilterUI();
       showToast(on ? '已开启广告拦截（重新打开该集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
+    }
+
+    /* ---------- 信息层（OSD） ----------
+       类似 mpv 按 i 的显示：标题/分辨率、系统时间、播放进度、下载速度。
+       按键盘 i 或点控制条上的 ⓘ 切换。 */
+    function osdEnabled() {
+      try { return localStorage.getItem('tvbox_osd') === '1'; } catch (e) { return false; }
+    }
+    function toggleOsd() {
+      const on = !osdEnabled();
+      try { localStorage.setItem('tvbox_osd', on ? '1' : '0'); } catch (e) {}
+      const el = document.getElementById('pvOsd');
+      if (el) el.classList.toggle('show', on);
+      if (on) renderOsd();
+      showToast(on ? '已显示信息层（再按 i 关闭）' : '已关闭信息层', 1800);
+    }
+    function fmtSpeed(bytesPerSec) {
+      if (!(bytesPerSec > 0)) return '';
+      const mb = bytesPerSec / 1024 / 1024;
+      if (mb >= 1) return mb.toFixed(1) + ' MB/s';
+      return Math.round(bytesPerSec / 1024) + ' KB/s';
+    }
+    function renderOsd() {
+      const el = document.getElementById('pvOsd');
+      if (!el || !el.classList.contains('show')) return;
+
+      const title = document.getElementById('mTitle');
+      const meta = document.getElementById('mMeta');
+      const epName = (currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx] &&
+        currentDetail.playSources[currentSourceIdx].episodes && currentDetail.playSources[currentSourceIdx].episodes[currentEpIdx] || {}).name || '';
+
+      let w = 0, h = 0, pos = 0, dur = 0, speed = 0, rate = 1;
+      if (isMpv()) {
+        w = mpvState.width || 0; h = mpvState.height || 0;
+        pos = mpvState.position || 0; dur = mpvState.duration || 0;
+        speed = mpvState.cacheSpeed || 0; rate = mpvState.speed || 1;
+      } else {
+        w = pvVideo.videoWidth || 0; h = pvVideo.videoHeight || 0;
+        pos = compat.on ? compatPosition() : (pvVideo.currentTime || 0);
+        dur = seekDuration();
+        rate = pvVideo.playbackRate || 1;
+      }
+
+      const t1 = document.getElementById('osdTitle');
+      const t2 = document.getElementById('osdClock');
+      const t3 = document.getElementById('osdTime');
+      const t4 = document.getElementById('osdSpeed');
+
+      if (t1) t1.textContent = `${(title && title.textContent) || ''}${epName ? '：' + epName : ''}\n${w && h ? w + ' × ' + h : '分辨率未知'}`;
+      if (t1) t1.style.whiteSpace = 'pre';
+      if (t2) t2.textContent = new Date().toLocaleTimeString();
+      if (t3) t3.textContent = `${fmtTime(pos)} / ${dur > 0 ? fmtTime(dur) : '--:--'}`;
+      if (t4) t4.textContent = [fmtSpeed(speed), rate && Math.abs(rate - 1) > 0.01 ? rate.toFixed(2) + 'x' : '']
+        .filter(Boolean).join('  ');
     }
 
     /* ---------- 播放中跳过广告 ---------- */
@@ -3619,6 +3717,7 @@
 
     function updateControls() {
       maybeAutoNext();
+      if (osdEnabled()) renderOsd();
       // 播到广告区间就跳过去（区间由 /api/ads 预先给出，列表本身没被改动）
       {
         const p0 = isMpv()
@@ -3768,6 +3867,11 @@
         case 'KeyF':
           e.preventDefault();
           toggleFullscreen();
+          break;
+        case 'KeyI':
+          // 信息层开关（类似 mpv 按 i）
+          e.preventDefault();
+          toggleOsd();
           break;
         case 'Escape':
           // 桌面版全屏：Esc 只退出全屏，绝不关闭播放页
