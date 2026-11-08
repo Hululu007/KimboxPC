@@ -215,6 +215,59 @@ app.post('/api/site/select', (req, res) => {
   res.json({ success: true, activeSite: found.name });
 });
 
+/* ---------- 站点延迟探测 ----------
+   并发拉每个站点的首页接口并计时，用于下拉列表标注快慢。
+   结果缓存 3 分钟，避免每次打开下拉都重新压测。 */
+const sitePingCache = new Map();  // key -> { ms, ok, ts }
+const SITE_PING_TTL = 3 * 60 * 1000;
+
+async function pingOneSite(site, timeoutMs = 6000) {
+  const t0 = Date.now();
+  try {
+    const p = CmsEngine.getHome(site);
+    const r = await Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs))
+    ]);
+    const ms = Date.now() - t0;
+    const list = (r && r.list) || [];
+    return { ms, ok: list.length > 0, count: list.length };
+  } catch (e) {
+    return { ms: Date.now() - t0, ok: false, error: e.message };
+  }
+}
+
+app.get('/api/sites/ping', async (req, res) => {
+  const force = String(req.query.force || '') === '1';
+  const now = Date.now();
+  const out = {};
+  const todo = [];
+
+  for (const s of state.sites) {
+    if (s.isDexSpider) { out[s.key] = { ok: false, ms: 0, dex: true }; continue; }
+    const hit = sitePingCache.get(s.key);
+    if (!force && hit && now - hit.ts < SITE_PING_TTL) { out[s.key] = { ms: hit.ms, ok: hit.ok }; continue; }
+    todo.push(s);
+  }
+
+  // 并发 5，避免一次性打满
+  let cursor = 0;
+  const workers = new Array(Math.min(5, Math.max(1, todo.length))).fill(0).map(async () => {
+    while (cursor < todo.length) {
+      const s = todo[cursor++];
+      const r = await pingOneSite(s);
+      out[s.key] = { ms: r.ms, ok: r.ok };
+      sitePingCache.set(s.key, { ...r, ts: Date.now() });
+    }
+  });
+  await Promise.all(workers);
+
+  if (sitePingCache.size > 200) {
+    for (const k of [...sitePingCache.keys()].slice(0, 100)) sitePingCache.delete(k);
+  }
+  res.json({ results: out, ts: Date.now() });
+});
+
 /* ==================== 影视数据 ==================== */
 
 function requireSite(res) {
