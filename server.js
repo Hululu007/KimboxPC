@@ -91,9 +91,20 @@ async function applyConfig(row) {
 /* ==================== 配置源管理 ==================== */
 
 app.get('/api/configs', (req, res) => {
+  const live = state.sites ? state.sites.length : 0;
+  const configs = ConfigRepo.list().map(c => {
+    // 名称里可能带旧的数量后缀（添加时写死的），这里剥掉，由前端用实时数量渲染
+    const base = String(c.name || '').replace(/\s*·\s*\d+\s*站\s*$/, '');
+    return {
+      ...c,
+      name: base,
+      siteCount: (c.id === state.configId) ? live : null
+    };
+  });
   res.json({
-    configs: ConfigRepo.list(),
-    current: { id: state.configId, url: state.url }
+    configs,
+    current: { id: state.configId, url: state.url },
+    liveSiteCount: live
   });
 });
 
@@ -107,7 +118,7 @@ app.post('/api/configs', async (req, res) => {
     if (!name) {
       try { name = new URL(url).hostname; } catch (e) { name = url.slice(0, 30); }
     }
-    const row = ConfigRepo.add(url, `${name} · ${(parsed.sites || []).length}站`);
+    const row = ConfigRepo.add(url, name);   // 数量改为前端按实时值渲染
     await applyConfig(row);
     res.json({
       success: true,
@@ -169,7 +180,7 @@ app.post('/api/config/load', async (req, res) => {
   if (!url) return res.status(400).json({ error: '请提供配置源 URL' });
   try {
     const parsed = await ConfigParser.load(url);
-    const row = ConfigRepo.add(url, new URL(url).hostname + ` · ${(parsed.sites || []).length}站`);
+    const row = ConfigRepo.add(url, new URL(url).hostname);   // 同上，不再写死数量
     await applyConfig(row);
     res.json({
       success: true,

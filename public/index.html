@@ -1178,7 +1178,9 @@
       data.configs.forEach(c => {
         const opt = document.createElement('option');
         opt.value = String(c.id);
-        opt.textContent = c.name || c.url;
+        // 站点数量用实时值（站点被删会跟着变），不再用添加时写死的字符串
+        const label = c.name || c.url;
+        opt.textContent = (c.siteCount > 0) ? `${label} · ${c.siteCount}站` : label;
         if (data.current && data.current.id === c.id) opt.selected = true;
         sel.appendChild(opt);
       });
