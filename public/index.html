@@ -1975,10 +1975,6 @@
     // 网页只负责浏览/选集/进度控制，通过 /api/mpv/* 驱动 mpv。
 
     const mpvState = { running: false, position: 0, duration: 0, paused: true, volume: 100, title: '' };
-    let lastMpvPos = 0;        // 上一次采样位置（用于检测时间轴跳变）
-    let mpvSelfSeekAt = 0;     // 自己刚触发过 seek 的时间戳
-    let lastVideoPos = 0;      // 浏览器引擎下的上次位置
-    let videoSelfSeekAt = 0;   // 浏览器引擎下自己 seek 的时间戳
     let mpvTimer = null;
 
     function engineMode() {
@@ -2274,13 +2270,6 @@
           mpvState.paused = !!s.paused;
           const newPos = s.position || 0;
 
-        // 时间轴跳变检测：位置突然倒退很多，通常是源在中途插了广告/重置了时间轴
-        if (handleTimelineJump(newPos, s.paused, () => lastMpvPos, (v) => { lastMpvPos = v; },
-            Date.now() - mpvSelfSeekAt < 4000,
-            (target) => { mpvSelfSeekAt = Date.now(); mpvCmd('seek', [target, 'absolute']); })) {
-          return;
-        }
-        if (newPos > lastMpvPos || Math.abs(newPos - lastMpvPos) < 45) lastMpvPos = newPos;
 
         mpvState.position = newPos;
           mpvState.duration = s.duration || 0;
@@ -2830,30 +2819,6 @@
       if (v) showToast('已开启自动连播', 1600);
     }
 
-    /* ---------- 时间轴跳变（插播广告）处理 ---------- */
-    // 用「最近 60 秒内最多跳 3 次、两次之间至少 5 秒」代替原来的一刀切 60 秒冷却，
-    // 否则广告分段较多时只跳得动第一次。
-    let adJumpTimes = [];
-
-    function handleTimelineJump(newPos, paused, getLast, setLast, selfSeek, doSeek) {
-      if (selfSeek || paused) return false;
-      const last = getLast();
-      if (!(last > 60) || !(newPos < last - 45)) return false;
-
-      const now = Date.now();
-      adJumpTimes = adJumpTimes.filter(t => now - t < 60000);
-      const tooSoon = adJumpTimes.length > 0 && now - adJumpTimes[adJumpTimes.length - 1] < 5000;
-      const tooMany = adJumpTimes.length >= 3;
-      if (tooSoon || tooMany) return false;
-
-      adJumpTimes.push(now);
-      showToast('检测到播放位置跳变（疑似插播广告），已尝试回到原进度', 3500);
-      const back = last + 2;
-      setLast(back);
-      doSeek(back);
-      return true;
-    }
-
     /** 当前是否已播到结尾 */
     function isPlaybackEnded() {
       if (isMpv()) return sawProgress && !!(mpvState.eof || mpvState.ended);
@@ -3400,8 +3365,8 @@
 
     function seekTo(target) {
       if (!isFinite(target) || target < 0) return;
-      if (isMpv()) { mpvSelfSeekAt = Date.now(); lastMpvPos = target; mpvCmd('seek', [target, 'absolute']); return; }
-      if (compat.on) { videoSelfSeekAt = Date.now(); lastVideoPos = target; compatSeek(target); return; }
+      if (isMpv()) { mpvCmd('seek', [target, 'absolute']); return; }
+      if (compat.on) { compatSeek(target); return; }
       const wasPlaying = !pvVideo.paused;
 
       if (wasPlaying) pvVideo.pause();
@@ -3579,12 +3544,6 @@
       const pos = compat.on ? compatPosition() : pvVideo.currentTime;
 
       // 浏览器引擎 / 兼容模式也做跳变检测（全屏时同样生效）
-      if (handleTimelineJump(pos, pvVideo.paused, () => lastVideoPos, (v) => { lastVideoPos = v; },
-          Date.now() - videoSelfSeekAt < 4000,
-          (target) => { videoSelfSeekAt = Date.now(); seekTo(target); })) {
-        return;
-      }
-      if (pos > lastVideoPos || Math.abs(pos - lastVideoPos) < 45) lastVideoPos = pos;
 
       if (!isSeekDragging() && !seeking) {
         const durLabel = compat.on
