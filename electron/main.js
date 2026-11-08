@@ -42,10 +42,31 @@ function loadNative() {
   if (native) return native;
   const addon = path.join(ROOT, 'native', 'build', 'Release', 'mpv_native.node');
   const dll = path.join(ROOT, 'native', 'lib', 'libmpv-2.dll');
+  const libDir = path.join(ROOT, 'native', 'lib');
   if (!fs.existsSync(addon)) throw new Error('原生模块未编译: ' + addon);
   if (!fs.existsSync(dll)) throw new Error('缺少 libmpv-2.dll: ' + dll);
-  native = require(addon);
-  native.init(dll);
+
+  // libmpv 依赖同目录下的 vulkan-1.dll 等文件；把该目录加进 DLL 搜索路径，
+  // 否则在没装 Vulkan 运行时的机器上 LoadLibrary 会直接失败
+  try {
+    const envPath = process.env.PATH || '';
+    if (!envPath.toLowerCase().includes(libDir.toLowerCase())) {
+      process.env.PATH = libDir + ';' + envPath;
+    }
+  } catch (e) {}
+
+  try {
+    native = require(addon);
+  } catch (e) {
+    throw new Error('无法加载原生模块（' + e.message + '）。若是新机器，请先双击「修复运行环境.bat」');
+  }
+
+  try {
+    native.init(dll);
+  } catch (e) {
+    throw new Error('libmpv 初始化失败：' + e.message +
+      '。常见原因：1) 缺少 vulkan-1.dll（已在 native\\lib，请确认未被杀软删除）；2) 文件被 Windows 标记为「来自网络」（右键属性→解除锁定）；3) 系统缺少 VC++ 运行库。可先双击「修复运行环境.bat」');
+  }
   return native;
 }
 
