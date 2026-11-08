@@ -1335,15 +1335,30 @@
     // Electron 不支持 window.prompt()，需要输入的地方统一走这里
     let askResolve = null;
 
-    function askText(title, hint, placeholder) {
+    /**
+     * 通用输入弹窗。
+     * 传 second（{ placeholder }）时多显示一个输入框，
+     * 确定后返回 { value, value2 }；不传则照旧返回字符串。
+     */
+    function askText(title, hint, placeholder, second) {
       return new Promise((resolve) => {
         askResolve = resolve;
         const mask = document.getElementById('askMask');
         const input = document.getElementById('askInput');
+        const input2 = document.getElementById('askInput2');
         document.getElementById('askTitle').textContent = title || '请输入';
         document.getElementById('askHint').textContent = hint || '';
         input.value = '';
         input.placeholder = placeholder || '';
+        if (second) {
+          input2.style.display = '';
+          input2.value = '';
+          input2.placeholder = second.placeholder || '';
+        } else {
+          input2.style.display = 'none';
+          input2.value = '';
+        }
+        window.__askSecond = !!second;
         mask.classList.add('show');
         setTimeout(() => input.focus(), 50);
       });
@@ -1351,10 +1366,14 @@
 
     function askOk() {
       const input = document.getElementById('askInput');
+      const input2 = document.getElementById('askInput2');
       const v = input ? input.value.trim() : '';
+      const v2 = (window.__askSecond && input2) ? input2.value.trim() : '';
       document.getElementById('askMask').classList.remove('show');
       const r = askResolve; askResolve = null;
-      if (r) r(v);
+      const needSecond = window.__askSecond;
+      window.__askSecond = false;
+      if (r) r(needSecond ? { value: v, value2: v2 } : v);
     }
 
     function askCancel() {
@@ -1372,18 +1391,21 @@
     });
 
     async function addConfig() {
-      const url = await askText(
+      const answers = await askText(
         '添加配置源',
-        '支持 http/https 链接，也支持本地 .json 文件路径',
-        'https://example.com/my.json'
+        '第一行填 http/https 链接或本地 .json 路径；第二行可自定义名称（首页显示用，可留空）',
+        'https://example.com/my.json',
+        { placeholder: '自定义名称（可选，例如：我的源）' }
       );
+      const url = answers && (answers.value || answers);
+      const customName = (answers && answers.value2) ? String(answers.value2).trim() : '';
       if (!url) return;
       showStatus('正在添加配置源...');
       try {
         const resp = await fetch('/api/configs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: url.trim() })
+          body: JSON.stringify({ url: url.trim(), name: customName || undefined })
         });
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
@@ -1572,6 +1594,27 @@
           };
           row.appendChild(useBtn);
         }
+
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'secondary';
+        renameBtn.textContent = '改名';
+        renameBtn.onclick = async () => {
+          const v = await askText('重命名配置源', '这个名字会显示在顶部下拉里，可用中文', c.name || c.url, { placeholder: '新名称' });
+          if (!v || !v.value) return;
+          try {
+            const r = await fetch(`/api/configs/${c.id}/rename`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: v.value })
+            });
+            const d = await r.json();
+            if (d.error) throw new Error(d.error);
+            await refreshConfigList();
+            await renderConfigManager();
+            showToast('已重命名', 2000);
+          } catch (e) { alert('重命名失败: ' + e.message); }
+        };
+        row.appendChild(renameBtn);
 
         const delBtn = document.createElement('button');
         delBtn.className = 'ghost-btn';
@@ -3747,6 +3790,8 @@
       <div class="ask-title" id="askTitle">请输入</div>
       <div class="ask-hint" id="askHint"></div>
       <input type="text" class="ask-input" id="askInput" autocomplete="off" spellcheck="false">
+      <input type="text" class="ask-input" id="askInput2" autocomplete="off" spellcheck="false"
+             style="margin-top:8px; display:none;">
       <div class="ask-actions">
         <button class="ghost-btn" id="askCancelBtn" onclick="askCancel()">取消</button>
         <button class="primary-btn" id="askOkBtn" onclick="askOk()">确定</button>

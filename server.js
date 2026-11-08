@@ -90,6 +90,17 @@ async function applyConfig(row) {
 
 /* ==================== 配置源管理 ==================== */
 
+// 重命名配置源（首页下拉显示的就是这个名字）
+app.post('/api/configs/:id/rename', (req, res) => {
+  const id = Number(req.params.id);
+  const name = String((req.body && req.body.name) || '').trim();
+  if (!id) return res.status(400).json({ error: '缺少 id' });
+  const row = ConfigRepo.get(id);
+  if (!row) return res.status(404).json({ error: '配置源不存在' });
+  ConfigRepo.rename(id, name);
+  res.json({ success: true, name });
+});
+
 app.get('/api/configs', (req, res) => {
   const live = state.sites ? state.sites.length : 0;
   const configs = ConfigRepo.list().map(c => {
