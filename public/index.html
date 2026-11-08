@@ -983,6 +983,7 @@
         <option value="mpv">mpv</option>
         <option value="browser">浏览器</option>
       </select>
+      <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
       <button class="secondary" onclick="toggleFullscreen()">⛶ 全屏 (F)</button>
       <select class="ctrl-rate" id="playerSel" title="选择外部播放器"></select>
@@ -1055,13 +1056,16 @@
             <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
             兼容模式：仅在脏流时转封装（默认开启；干净流直连，拖动秒级）
           </label>
+        </div>
+
+        <div id="generalOptions">
           <label class="audio-auto">
             <input type="checkbox" id="autoNextChk" onchange="saveAutoNext(this.checked)">
             自动连播下一集（默认开启，本集播完自动接下一集）
           </label>
           <label class="audio-auto">
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
-            拦截插播广告（默认开启；关闭后完全用源原始列表，最稳）
+            拦截插播广告（默认开启；关闭后完全用源原始列表，播不了时先关它）
           </label>
         </div>
 
@@ -2033,6 +2037,10 @@
       const compatBox = document.getElementById('compatOptions');
       if (compatBox) compatBox.style.display = mpv ? 'none' : 'block';
 
+      // 通用开关（自动连播 / 广告拦截）与引擎无关，任何引擎下都要显示
+      const generalBox = document.getElementById('generalOptions');
+      if (generalBox) generalBox.style.display = 'block';
+
       document.querySelectorAll('#engineBtns .source-tab').forEach(el => {
         el.classList.toggle('active', el.dataset.engine === (mpv ? 'mpv' : 'browser'));
       });
@@ -2894,15 +2902,22 @@
     function adFilterEnabled() {
       try { return localStorage.getItem('tvbox_adfilter') !== '0'; } catch (e) { return true; }
     }
-    // 打开播放页时回显开关状态
+    // 回显开关状态（顶栏按钮 + 面板复选框）
     function syncAdFilterUI() {
-      const el = document.getElementById('adFilterChk');
-      if (el) el.checked = adFilterEnabled();
+      const on = adFilterEnabled();
+      const chk = document.getElementById('adFilterChk');
+      if (chk) chk.checked = on;
+      const btn = document.getElementById('btnAdFilter');
+      if (btn) {
+        btn.textContent = on ? '广告拦截：开' : '广告拦截：关';
+        btn.style.color = on ? '' : '#f6a94a';
+      }
     }
 
     function toggleAdFilter(on) {
       try { localStorage.setItem('tvbox_adfilter', on ? '1' : '0'); } catch (e) {}
-      showToast(on ? '已开启广告拦截（重新打开选集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
+      syncAdFilterUI();
+      showToast(on ? '已开启广告拦截（重新打开该集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
     }
 
     function startAdWatch(origUrl) {
