@@ -1927,22 +1927,23 @@
     /* ---------- 播放列表探测（带缓存，用于决定是否需要转封装） ---------- */
     const probeMemo = new Map();
 
-    async function probeQuick(url, timeoutMs = 6000) {
+    async function probeQuick(url, timeoutMs = 6000, filtered = false) {
       if (!url) return null;
-      if (probeMemo.has(url)) return probeMemo.get(url);
+      const key = (filtered ? 'f:' : '') + url;
+      if (probeMemo.has(key)) return probeMemo.get(key);
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}`, { signal: ctrl.signal });
+        const q = `/api/probe?url=${encodeURIComponent(url)}${filtered ? '&filter=1' : ''}`;
+        const r = await fetch(q, { signal: ctrl.signal });
         clearTimeout(timer);
         const d = await r.json();
         if (d && d.duration) compat.duration = d.duration;
-        probeMemo.set(url, d);
+        probeMemo.set(key, d);
         if (probeMemo.size > 60) probeMemo.delete(probeMemo.keys().next().value);
         return d;
       } catch (e) {
-        // 探测失败就当干净流处理，保证能正常起播
-        probeMemo.set(url, null);
+        // 探测失败不要缓存（否则这个地址整场都不会再尝试过滤）
         return null;
       }
     }
@@ -2928,14 +2929,20 @@
     }
     function checkAdWatch() {
       if (!adWatch || adWatch.done || adWatch.retried) return;
-      if (Date.now() - adWatch.t0 < 15000) return;
+      // 给足时间：拉取+过滤上千分片的列表本身就要几秒，太激进会误判
+      if (Date.now() - adWatch.t0 < 25000) return;
+      // 只有「文件压根没加载成功」才算过滤的锅：时长仍为 0 且没有任何进度
+      const dur = isMpv() ? (mpvState.duration || 0) : (isFinite(pvVideo.duration) ? pvVideo.duration : 0);
+      const pos = isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0);
+      if (dur > 0 || pos > 1) { adWatch.done = true; return; }
+
       adWatch.retried = true;
       const orig = adWatch.orig;
       try {
         fetch('/api/adfilter/report', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: orig, reason: '过滤后 15 秒无播放进度' })
+          body: JSON.stringify({ url: orig, reason: '过滤后 25 秒仍无法加载（时长与进度都为 0）' })
         }).catch(() => {});
       } catch (e) {}
       window.__forceRawFor = orig;
@@ -3013,15 +3020,21 @@
       let adInfo = null;
       adWatch = null;
       if (/\.m3u8/i.test(finalUrl)) {
-        // 用户关掉广告拦截时，直接走原始列表（最稳，绝不改动源）
+        // 关闭拦截（或该域名已被判为"过滤会出问题"）→ 直接播源地址，完全不经过代理
         const forceRaw = window.__forceRawFor === finalUrl || !adFilterEnabled();
-        adInfo = forceRaw ? null : await probeQuick(finalUrl, 20000, true);
-        // 必须是绝对地址：mpv 拿到相对路径会当成本地文件打开而失败
-        playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}${forceRaw ? '&raw=1' : ''}`;
-        if (adInfo && adInfo.adRemoved > 0) {
-          showToast(`已过滤 ${adInfo.adRemoved} 处插播广告，直接从正片开始`, 3200);
+        if (forceRaw) {
+          playUrl = finalUrl;
+        } else {
+          adInfo = await probeQuick(finalUrl, 20000, true);
+          if (adInfo && adInfo.adRemoved > 0) {
+            // 只有确实要删广告时才走代理；否则直连源地址，彻底避开代理环节
+            playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}`;
+            showToast(`已过滤 ${adInfo.adRemoved} 处插播广告，直接从正片开始`, 3200);
+            startAdWatch(finalUrl);
+          } else {
+            playUrl = finalUrl;
+          }
         }
-        if (!forceRaw) startAdWatch(finalUrl);
       }
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
@@ -3036,7 +3049,7 @@
 
       // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
-      if (compatEnabled() && playUrl.includes('/api/playlist')) {
+      if (compatEnabled() && /\.m3u8/i.test(playUrl)) {
         // 过滤探测偶尔会慢（要拉上千个分片），若失败就退回普通探测：
         // 宁可拿不到广告数，也不能让脏流漏掉转封装（否则声音会出问题）
         let info = adInfo;

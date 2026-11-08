@@ -651,9 +651,26 @@ function chunkInfo(lines) {
   return { dur, segs };
 }
 
+/**
+ * 把播放列表里的所有地址补全成绝对路径。
+ *
+ * 关键：不仅媒体分片行要补，**标签内的 URI="..." 也必须补**，
+ * 否则 AES-128 加密源会去本地 3980 取密钥（404），导致整条流播不了。
+ * 涉及：EXT-X-KEY / EXT-X-MAP / EXT-X-MEDIA / EXT-X-SESSION-KEY /
+ *       EXT-X-I-FRAME-STREAM-INF / EXT-X-PART / EXT-X-PRELOAD-HINT
+ */
 function toAbsolute(line, base) {
   const s = line.trim();
-  if (!s || s.startsWith('#')) return line;
+  if (!s) return line;
+
+  if (s.startsWith('#')) {
+    // 标签内的 URI 属性补全
+    return line.replace(/URI="([^"]*)"/g, (m, uri) => {
+      if (!uri || /^(https?:|data:|skd:)/i.test(uri)) return m;
+      try { return 'URI="' + new URL(uri, base).href + '"'; } catch (e) { return m; }
+    });
+  }
+
   try { return new URL(s, base).href; } catch (e) { return line; }
 }
 
@@ -794,6 +811,11 @@ function filterAdChunks(text, baseUrl) {
   return { text: newText, removed, keptChunks: chunks.length - removed, totalChunks: chunks.length };
 }
 
+// 把整份播放列表的地址全部补全为绝对路径（不改动结构）
+function absolutizeAll(text, baseUrl) {
+  return text.split(/\r?\n/).map(l => toAbsolute(l, baseUrl)).join('\n');
+}
+
 // 解析 master → 取第一个变体（与 probe 逻辑一致）
 async function fetchPlaylistMaybeMaster(url) {
   const r = await axios.get(url, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
@@ -832,26 +854,32 @@ async function getFilteredPlaylist(url, forceRaw) {
   const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
   const host = hostOf(finalUrl) || hostOf(url);
 
-  // 该域名曾被判定为「过滤会出问题」→ 直接原样返回（只把地址补全成绝对路径）
-  let f;
+  // 该域名被判为「过滤会出问题」或用户要求原样 → 不改结构，但**必须补全所有地址**
+  // （包括 #EXT-X-KEY 的 URI，否则 AES-128 加密源会去本地取密钥而失败）
+  let outText, removed = 0, totalChunks = 0, skipped = true, reason = '';
+
   if (forceRaw || isFilterDisabled(host)) {
-    const absolutized = text.split(/\r?\n/)
-      .map(l => (l.trim() && !l.trim().startsWith('#') ? toAbsolute(l, finalUrl) : l))
-      .join('\n');
-    f = { text: absolutized, removed: 0, totalChunks: 0, skipped: true, reason: forceRaw ? '强制原样' : '该域名已关闭过滤' };
+    outText = absolutizeAll(text, finalUrl);
+    reason = forceRaw ? '强制原样' : '该域名已关闭过滤';
   } else {
-    f = filterAdChunks(text, finalUrl);
+    const f = filterAdChunks(text, finalUrl);
+    removed = f.removed || 0;
+    totalChunks = f.totalChunks || 0;
+    skipped = !!f.skipped;
+    reason = f.reason || '';
+    // 没删任何东西时，也走「补全地址」而不是原样返回，避免相对 URI 失效
+    outText = removed > 0 ? f.text : absolutizeAll(text, finalUrl);
   }
 
-  const infs = [...f.text.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
+  const infs = [...outText.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
   const out = {
-    text: f.text,
-    removed: f.removed || 0,
-    totalChunks: f.totalChunks || 0,
-    skipped: !!f.skipped,
-    reason: f.reason || '',
+    text: outText,
+    removed,
+    totalChunks,
+    skipped,
+    reason,
     host,
-    disc: (f.text.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
+    disc: (outText.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
     segments: infs.length,
     duration: Math.round(infs.reduce((a, b) => a + b, 0)),
     finalUrl,
