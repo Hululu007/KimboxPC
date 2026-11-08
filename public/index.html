@@ -2884,9 +2884,22 @@
         }
       }
 
+      // 开播前先做广告过滤：剔除「一对 discontinuity 夹住的短块」，
+      // 播放器拿到的是干净列表，广告不会被加载，也不会中途打断
+      let playUrl = finalUrl;
+      let adInfo = null;
+      if (/\.m3u8/i.test(finalUrl)) {
+        adInfo = await probeQuick(finalUrl, 12000, true);
+        // 必须是绝对地址：mpv 拿到相对路径会当成本地文件打开而失败
+        playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}`;
+        if (adInfo && adInfo.adRemoved > 0) {
+          showToast(`已过滤 ${adInfo.adRemoved} 处插播广告，直接从正片开始`, 3200);
+        }
+      }
+
       // mpv 内核模式：解码交给 mpv，网页只做控制
       if (isMpv()) {
-        openMpv(finalUrl, resumeAt || 0);
+        openMpv(playUrl, resumeAt || 0);
         probeAndWarn(finalUrl, true);
         return;
       }
@@ -2896,10 +2909,10 @@
 
       // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
-      if (compatEnabled() && finalUrl.includes('.m3u8')) {
-        const info = await probeQuick(finalUrl);
+      if (compatEnabled() && playUrl.includes('/api/playlist')) {
+        const info = adInfo || await probeQuick(finalUrl, 12000, true);
         if (info && info.disc > 0) {
-          playCompat(finalUrl, resumeAt || 0);
+          playCompat(playUrl, resumeAt || 0);
           probeAndWarn(finalUrl, true);
           // 转封装的拖动要重启 ffmpeg（实测 10~16 秒），提示可换更快的内核
           if (!window.__dirtyHintShown) {
@@ -2930,7 +2943,7 @@
             manifestLoadingTimeOut: 15000,
             fragLoadingTimeOut: 20000
           });
-          hls.loadSource(finalUrl);
+          hls.loadSource(playUrl);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             document.getElementById('pvToast').classList.remove('show');

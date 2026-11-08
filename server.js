@@ -598,7 +598,147 @@ async function probePlaylist(url, depth = 0) {
 app.get('/api/probe', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+
+  // filter=1：返回「广告过滤后」的统计，用于界面提示「已过滤 N 处插播」
+  if (String(req.query.filter) === '1') {
+    try {
+      const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+      const f = filterAdChunks(text, finalUrl);
+      const infs = [...f.text.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
+      return res.json({
+        disc: (f.text.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
+        segments: infs.length,
+        duration: Math.round(infs.reduce((a, b) => a + b, 0)),
+        adRemoved: f.removed,
+        totalChunks: f.totalChunks
+      });
+    } catch (e) {
+      return res.json({ error: e.message });
+    }
+  }
+
   res.json(await probePlaylist(url) || {});
+});
+
+/* ==================== 播放列表广告过滤 ==================== */
+// 常见插播方式：主内容 | DISC | 短广告块(10~60s) | DISC | 主内容。
+// 这里在开播前把「被一对 discontinuity 夹住的短块」整块剔除，
+// 播放器拿到的就是干净流，不会中途被打断。
+
+function splitByDiscontinuity(text) {
+  const lines = text.split(/\r?\n/);
+  const chunks = [];
+  let cur = [];
+  for (const ln of lines) {
+    if (/^#EXT-X-DISCONTINUITY\b/i.test(ln.trim())) {
+      chunks.push(cur);
+      cur = [];
+    } else {
+      cur.push(ln);
+    }
+  }
+  chunks.push(cur);
+  return chunks;
+}
+
+function chunkInfo(lines) {
+  let dur = 0, segs = 0;
+  for (const ln of lines) {
+    const s = ln.trim();
+    if (s.startsWith('#EXTINF')) {
+      dur += parseFloat(s.split(':')[1]) || 0;
+      segs++;
+    }
+  }
+  return { dur, segs };
+}
+
+function toAbsolute(line, base) {
+  const s = line.trim();
+  if (!s || s.startsWith('#')) return line;
+  try { return new URL(s, base).href; } catch (e) { return line; }
+}
+
+/**
+ * 返回 { text, removed, keptChunks, totalChunks }
+ * 剔除规则（保守）：
+ *  - 只处理「非首、非尾」的块
+ *  - 时长在 5~120 秒之间，且至少 1 个分片
+ *  - 最多剔除 12 个块，避免误伤整部剧
+ */
+function filterAdChunks(text, baseUrl) {
+  const chunks = splitByDiscontinuity(text);
+  if (chunks.length < 3) return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length };
+
+  const infos = chunks.map(chunkInfo);
+  const isAd = new Array(chunks.length).fill(false);
+  let removed = 0;
+  for (let i = 1; i < chunks.length - 1 && removed < 12; i++) {
+    const { dur, segs } = infos[i];
+    if (segs > 0 && dur >= 5 && dur <= 120) { isAd[i] = true; removed++; }
+  }
+  if (removed === 0) return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length };
+
+  // 重建：第 0 块保留原样（含头部标签），后续保留块之间补回 discontinuity
+  const out = [];
+  const headerLines = [];
+  for (const ln of chunks[0]) headerLines.push(ln);
+
+  if (!isAd[0]) out.push(...headerLines);
+  else out.push(...headerLines.filter(l => /^#EXT-X-(VERSION|TARGETDURATION|MEDIA|INDEPENDENT|PLAYLIST)/i.test(l.trim())));
+
+  for (let i = 1; i < chunks.length; i++) {
+    if (isAd[i]) continue;
+    const body = [];
+    for (const ln of chunks[i]) {
+      const s = ln.trim();
+      if (!s) continue;
+      body.push(toAbsolute(ln, baseUrl));
+    }
+    out.push('#EXT-X-DISCONTINUITY');
+    out.push(...body);
+  }
+  return { text: out.join('\n') + '\n', removed, keptChunks: chunks.length - removed, totalChunks: chunks.length };
+}
+
+// 解析 master → 取第一个变体（与 probe 逻辑一致）
+async function fetchPlaylistMaybeMaster(url) {
+  const r = await axios.get(url, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
+  let text = String(r.data || '');
+  if (/#EXT-X-STREAM-INF/i.test(text) && !/#EXTINF/i.test(text)) {
+    const lines = text.split(/\r?\n/);
+    let variant = '';
+    for (let i = 0; i < lines.length; i++) {
+      if (!/^#EXT-X-STREAM-INF/i.test(lines[i])) continue;
+      for (let j = i + 1; j < lines.length; j++) {
+        const l = lines[j].trim();
+        if (!l || l.startsWith('#')) continue;
+        variant = l; break;
+      }
+      if (variant) break;
+    }
+    if (variant) {
+      const abs = new URL(variant, url).href;
+      const r2 = await axios.get(abs, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
+      return { text: String(r2.data || ''), finalUrl: abs };
+    }
+  }
+  return { text, finalUrl: url };
+}
+
+app.get('/api/playlist', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  try {
+    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+    const r = filterAdChunks(text, finalUrl);
+    if (r.removed > 0) console.log(`[广告过滤] 剔除 ${r.removed} 个插播块（共 ${r.totalChunks} 块）: ${finalUrl.slice(-50)}`);
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(r.text);
+  } catch (e) {
+    res.status(502).json({ error: '获取播放列表失败: ' + e.message });
+  }
 });
 
 /* ==================== 同片源聚合（按延迟排序） ==================== */
