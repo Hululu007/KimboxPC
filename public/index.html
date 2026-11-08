@@ -1928,7 +1928,8 @@
       if (url === window.__probeWarnedUrl) return;
       window.__probeWarnedUrl = url;
 
-      fetch(`/api/probe?url=${encodeURIComponent(url)}`)
+      // 播放用的是「过滤后」的列表，这里也按过滤后统计，避免时长/进度对不上
+      fetch(`/api/probe?url=${encodeURIComponent(url)}&filter=1`)
         .then(r => r.json())
         .then(d => {
           const disc = d && d.disc ? d.disc : 0;
