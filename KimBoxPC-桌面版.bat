@@ -1,19 +1,54 @@
 @echo off
-chcp 65001 >nul
-title KimBoxPC æ¡Œé¢ç‰ˆ
+chcp 936 >nul
+setlocal
+title KimBoxPC ×ÀÃæ°æ
 cd /d "%~dp0"
 
-if not exist "node_modules\electron\dist\electron.exe" (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° Electron è¿è¡Œåº“
-  echo         è¯·å…ˆæ‰§è¡Œ: npm install
-  pause
-  exit /b 1
+set "APP=%~dp0"
+if "%APP:~-1%"=="\" set "APP=%APP:~0,-1%"
+set "EXE=%~dp0node_modules\electron\dist\electron.exe"
+set "DLL=%~dp0native\lib\libmpv-2.dll"
+set "MOD=%~dp0native\build\Release\mpv_native.node"
+
+if not exist "%EXE%" goto noelectron
+if not exist "%DLL%" goto nodll
+
+if not exist "%MOD%" (
+  echo [ÌáÊ¾] Ô­ÉúÄ£¿éÈ±Ê§£¬³¢ÊÔ×Ô¶¯±àÒë£¨ĞèÒª VS C++ ¹¤¾ß + Python£©...
+  pushd "%~dp0native"
+  set "ELECTRON_RUN_AS_NODE=1"
+  "%~dp0node_modules\electron\dist\electron.exe" "%~dp0node_modules\node-gyp\bin\node-gyp.js" rebuild --target=45.2.3 --dist-url=https://electronjs.org/headers --arch=x64
+  set "ELECTRON_RUN_AS_NODE="
+  popd
 )
 
-if not exist "native\build\Release\mpv_native.node" (
-  echo [æç¤º] åŸç”Ÿæ¨¡å—å°šæœªç¼–è¯‘ï¼Œå°è¯•è‡ªåŠ¨ç¼–è¯‘...
-  pushd native
-  REM ç”¨ Electron å†…ç½®çš„ Node å¼•æ“è·‘ node-gypï¼Œæ— éœ€å®‰è£…ç³»ç»Ÿ Node
-  set "ELECTRON_RUN_AS_NODE=1"
-  "..\node_modules\electron\dist\electron.exe" "..\node_modules\node-gyp\bin\node-gyp.js" rebuild --target=45.2.3 --dist-url=https://electronjs.org/headers --arch=x64
-  set "ELECTRON_RUN_AS_NODE="
+echo [Æô¶¯] KimBoxPC ×ÀÃæ°æ...
+start "" "%EXE%" "%APP%"
+
+rem µÈ¼¸ÃëÈ·ÈÏÕæµÄÆğÀ´ÁË£¬±ÜÃâ¾²Ä¬Ê§°ÜÒ»ÉÁ¶ø¹ı
+timeout /t 3 >nul
+tasklist /FI "IMAGENAME eq electron.exe" | find /I "electron.exe" >nul
+if errorlevel 1 goto launchfail
+exit /b 0
+
+:noelectron
+echo [´íÎó] Î´ÕÒµ½ Electron ÔËĞĞ¿â
+echo        ÇëÈ·ÈÏ node_modules\electron\dist\electron.exe ´æÔÚ
+echo        ÈôÕû¸öÄ¿Â¼ÊÇ´ÓÑ¹Ëõ°ü½âÑ¹µÄ£¬ÇëÖØĞÂÍêÕû½âÑ¹
+pause
+exit /b 1
+
+:nodll
+echo [´íÎó] È±ÉÙ native\lib\libmpv-2.dll
+echo        ÇëÖØĞÂÍêÕû½âÑ¹Ñ¹Ëõ°ü£¬»òË«»÷¡¸ĞŞ¸´ÔËĞĞ»·¾³.bat¡¹
+pause
+exit /b 1
+
+:launchfail
+echo.
+echo [´íÎó] Electron Ã»ÓĞ³É¹¦Æô¶¯
+echo        ÇëË«»÷¡¸ĞŞ¸´ÔËĞĞ»·¾³.bat¡¹¼ì²éÈ±ÉÙµÄ×é¼ş
+echo        ÈôÌáÊ¾È±ÉÙ VC++ ÔËĞĞ¿â£¬Çë°²×°
+echo        Microsoft Visual C++ 2015-2022 ¿ÉÔÙ·¢ĞĞ×é¼ş°ü (x64)
+pause
+exit /b 1

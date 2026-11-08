@@ -1,17 +1,14 @@
 @echo off
-chcp 65001 >nul
-title åˆ›å»º KimBoxPC å¿«æ·æ–¹å¼
+chcp 936 >nul
+title ´´½¨ KimBoxPC ¿ì½Ý·½Ê½
 cd /d "%~dp0"
-
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\make_shortcut.ps1"
-
 if errorlevel 1 (
   echo.
-  echo [å¤±è´¥] åˆ›å»ºå¿«æ·æ–¹å¼å‡ºé”™ï¼Œè¯·æŸ¥çœ‹ä¸Šé¢çš„æç¤º
+  echo [Ê§°Ü] ´´½¨¿ì½Ý·½Ê½³ö´í£¬Çë²é¿´ÉÏÃæµÄÌáÊ¾
   pause
   exit /b 1
 )
-
 echo.
 timeout /t 4 >nul
 exit /b 0

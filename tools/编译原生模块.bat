@@ -1,29 +1,21 @@
 @echo off
-chcp 65001 >nul
-title ç¼–è¯‘ KimBoxPC åŸç”Ÿæ¨¡å—
+chcp 936 >nul
+title ±àÒë KimBoxPC Ô­ÉúÄ£¿é
 cd /d "%~dp0.."
-
 if not exist "node_modules\electron\dist\electron.exe" (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° Electron
+  echo [´íÎó] Î´ÕÒµ½ Electron
   pause
   exit /b 1
 )
-if not exist "node_modules\node-gyp\bin\node-gyp.js" (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° node-gyp
-  pause
-  exit /b 1
-)
-
-echo [ç¼–è¯‘] ä½¿ç”¨ Electron å†…ç½® Node ç¼–è¯‘åŸç”Ÿæ¨¡å—...
+echo [±àÒë] Ê¹ÓÃ Electron ÄÚÖÃ Node ±àÒëÔ­ÉúÄ£¿é...
 set "ELECTRON_RUN_AS_NODE=1"
 "node_modules\electron\dist\electron.exe" "node_modules\node-gyp\bin\node-gyp.js" rebuild --directory=native --target=45.2.3 --dist-url=https://electronjs.org/headers --arch=x64
 set "ELECTRON_RUN_AS_NODE="
-
 if exist "native\build\Release\mpv_native.node" (
   echo.
-  echo [å®Œæˆ] åŸç”Ÿæ¨¡å—å·²ç”Ÿæˆ
+  echo [Íê³É] Ô­ÉúÄ£¿éÒÑÉú³É
 ) else (
   echo.
-  echo [å¤±è´¥] ç¼–è¯‘æœªæˆåŠŸï¼Œè¯·æ£€æŸ¥ä¸Šæ–¹çš„é”™è¯¯ä¿¡æ¯
+  echo [Ê§°Ü] ±àÒëÎ´³É¹¦£¬Çë²é¿´ÉÏ·½´íÎó
 )
 pause

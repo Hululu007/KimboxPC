@@ -1,7 +1,7 @@
 @echo off
-chcp 65001 >nul
-title æ‰“åŒ… KimBoxPC ä¾¿æºç‰ˆ
+chcp 936 >nul
+title ´ò°ü KimBoxPC ±ãĞ¯°æ
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\æ‰“åŒ…å‘å¸ƒ.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\´ò°ü·¢²¼.ps1"
 echo.
 pause

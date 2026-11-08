@@ -1,7 +1,7 @@
 @echo off
-chcp 65001 >nul
-title KimBoxPC 杩愯鐜浣撴
+chcp 936 >nul
+title KimBoxPC 运行环境体检
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\淇杩愯鐜.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\修复运行环境.ps1"
 echo.
 pause
