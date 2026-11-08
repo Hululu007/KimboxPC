@@ -1054,7 +1054,10 @@ server.on('listening', async () => {
   if (saved.length > 0) {
     try {
       await applyConfig(saved[0]);
-      console.log(`已恢复配置源: ${saved[0].name || saved[0].url}（${state.sites.length} 个站点）`);
+      // 只打印名称或主机名：不要把完整的配置源地址写进控制台/日志
+      let shown = saved[0].name;
+      if (!shown) { try { shown = new URL(saved[0].url).hostname; } catch (e) { shown = '(本地文件)'; } }
+      console.log(`已恢复配置源: ${shown}（${state.sites.length} 个站点）`);
     } catch (e) {
       console.log('恢复配置源失败:', e.message);
     }
