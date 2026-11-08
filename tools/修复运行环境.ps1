@@ -62,7 +62,10 @@ foreach ($d in $vc) {
 }
 if ($vcMissing.Count -gt 0) {
     Write-Host "[提示] 可能缺少 VC++ 运行库：$($vcMissing -join ', ')" -ForegroundColor Yellow
-    Write-Host '       下载「Microsoft Visual C++ 2015-2022 可再发行组件包 (x64)」安装后重试'
+    Write-Host '       请下载安装「Microsoft Visual C++ 2015-2022 可再发行组件包 (x64)」：'
+    Write-Host '         https://aka.ms/vs/17/release/vc_redist.x64.exe' -ForegroundColor Cyan
+    Write-Host '       安装后重新启动 KimBoxPC 即可。'
+    Write-Host '       （32 位系统用 https://aka.ms/vs/17/release/vc_redist.x86.exe）'
 } else {
     Write-Host '[正常] VC++ 运行库齐全'
 }

@@ -208,3 +208,17 @@ node server.js
 ```json
 { "active": 1, "max": 2, "threads": "auto", "priority": "below_normal" }
 ```
+
+### 提示「libmpv-2.dll 加载失败」怎么办
+
+按顺序排查：
+
+1. **解除网络锁定**：右键 zip → 属性 → 勾选「解除锁定」再解压
+2. **跑体检脚本**：双击 `修复运行环境.bat`
+3. **装 VC++ 运行库**（若体检提示缺少）：
+
+   - x64：https://aka.ms/vs/17/release/vc_redist.x64.exe （24.4 MB，微软官方）
+   - x86：https://aka.ms/vs/17/release/vc_redist.x86.exe
+   - 官方说明：https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+
+4. 仍失败：确认杀软没有删除 `native\lib\vulkan-1.dll`

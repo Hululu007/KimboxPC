@@ -26,8 +26,13 @@
 【常见问题】
 
 - 提示 libmpv-2.dll 加载失败
-  → 先跑「修复运行环境.bat」；仍不行多半是缺 VC++ 运行库，
-    安装「Microsoft Visual C++ 2015-2022 可再发行组件包 (x64)」
+  → 先跑「修复运行环境.bat」
+  → 若提示缺少 VC++ 运行库，下载安装（微软官方，24.4 MB）：
+      https://aka.ms/vs/17/release/vc_redist.x64.exe
+    32 位系统用：
+      https://aka.ms/vs/17/release/vc_redist.x86.exe
+    官方说明页：
+      https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
 
 - 提示「原生模块未编译」
   → native\build\Release\mpv_native.node 缺失，重新解压完整包
