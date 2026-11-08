@@ -1954,8 +1954,8 @@
       if (url === window.__probeWarnedUrl) return;
       window.__probeWarnedUrl = url;
 
-      // 播放用的是「过滤后」的列表，这里也按过滤后统计，避免时长/进度对不上
-      fetch(`/api/probe?url=${encodeURIComponent(url)}&filter=1`)
+      // 现在播放的是「源原始列表」（广告改为播放时跳过），所以按原始统计时长
+      fetch(`/api/probe?url=${encodeURIComponent(url)}`)
         .then(r => r.json())
         .then(d => {
           const disc = d && d.disc ? d.disc : 0;
@@ -2897,7 +2897,6 @@
     /* ---------- 广告过滤自愈看门狗 ----------
        如果用了过滤后的播放列表却在 15 秒内毫无播放进度，
        判定为「过滤把这条流弄坏了」：上报服务端关闭该域名过滤，并原样重试一次。 */
-    let adWatch = null;
 
     /* ---------- 广告过滤开关（用户可一键关掉，关掉后完全用原始列表） ---------- */
     function adFilterEnabled() {
@@ -2921,35 +2920,35 @@
       showToast(on ? '已开启广告拦截（重新打开该集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
     }
 
-    function startAdWatch(origUrl) {
-      adWatch = { orig: origUrl, t0: Date.now(), done: false, retried: false };
-    }
-    function notePlaybackProgress(pos) {
-      if (adWatch && pos > 3) adWatch.done = true;
-    }
-    function checkAdWatch() {
-      if (!adWatch || adWatch.done || adWatch.retried) return;
-      // 给足时间：拉取+过滤上千分片的列表本身就要几秒，太激进会误判
-      if (Date.now() - adWatch.t0 < 25000) return;
-      // 只有「文件压根没加载成功」才算过滤的锅：时长仍为 0 且没有任何进度
-      const dur = isMpv() ? (mpvState.duration || 0) : (isFinite(pvVideo.duration) ? pvVideo.duration : 0);
-      const pos = isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0);
-      if (dur > 0 || pos > 1) { adWatch.done = true; return; }
+    /* ---------- 播放中跳过广告 ---------- */
+    // 由 /api/ads 预先给出区间，播到区间内就跳到末尾。不改列表，时间轴不变。
+    let adSkipGuard = 0;
 
-      adWatch.retried = true;
-      const orig = adWatch.orig;
-      try {
-        fetch('/api/adfilter/report', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: orig, reason: '过滤后 25 秒仍无法加载（时长与进度都为 0）' })
-        }).catch(() => {});
-      } catch (e) {}
-      window.__forceRawFor = orig;
-      showToast('广告过滤可能影响了这条线路，已自动关闭过滤并重试', 4000);
-      setTimeout(() => { try { playEpisodeByIndex(currentEpIdx); } catch (e) {} }, 800);
-    }
+    function maybeSkipAd(pos) {
+      const ranges = window.__adRanges;
+      if (!ranges || !ranges.length || !(pos > 0)) return false;
+      if (Date.now() - adSkipGuard < 1200) return false;
 
+      for (let i = 0; i < ranges.length; i++) {
+        const s = ranges[i][0], e = ranges[i][1];
+        if (pos >= s - 0.8 && pos < e - 0.3) {
+          adSkipGuard = Date.now();
+          const target = e + 0.4;
+          try {
+            if (isMpv()) {
+              mpvCmd('seek', [target, 'absolute']);
+            } else if (compat.on) {
+              compatSeek(target);
+            } else if (pvVideo) {
+              pvVideo.currentTime = target;
+            }
+          } catch (err) {}
+          showToast(`已跳过广告 ${Math.round(e - s)} 秒`, 1800);
+          return true;
+        }
+      }
+      return false;
+    }
     function pickDirectLine() {
       if (!currentDetail || !currentDetail.playSources) return null;
       const cur = (currentDetail.playSources[currentSourceIdx] || {}).episodes || [];
@@ -3014,28 +3013,20 @@
         }
       }
 
-      // 开播前先做广告过滤：剔除「一对 discontinuity 夹住的短块」，
-      // 播放器拿到的是干净列表，广告不会被加载，也不会中途打断
-      let playUrl = finalUrl;
-      let adInfo = null;
-      adWatch = null;
-      if (/\.m3u8/i.test(finalUrl)) {
-        // 关闭拦截（或该域名已被判为"过滤会出问题"）→ 直接播源地址，完全不经过代理
-        const forceRaw = window.__forceRawFor === finalUrl || !adFilterEnabled();
-        if (forceRaw) {
-          playUrl = finalUrl;
-        } else {
-          adInfo = await probeQuick(finalUrl, 20000, true);
-          if (adInfo && adInfo.adRemoved > 0) {
-            // 只有确实要删广告时才走代理；否则直连源地址，彻底避开代理环节
-            playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}`;
-            showToast(`已过滤 ${adInfo.adRemoved} 处插播广告，直接从正片开始`, 3200);
-            startAdWatch(finalUrl);
-          } else {
-            playUrl = finalUrl;
+      // 广告处理：开播前只「分析出广告在第几秒到第几秒」，**绝不改写播放列表**。
+      // 播放时由播放器自己跳到区间末尾，时间轴保持原样 → 进度不会错乱、加密源也不受影响。
+      const playUrl = finalUrl;
+      let adRanges = [];
+      if (/\.m3u8/i.test(finalUrl) && adFilterEnabled() && window.__forceRawFor !== finalUrl) {
+        try {
+          const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}`)).json();
+          if (r && Array.isArray(r.ranges) && r.ranges.length) {
+            adRanges = r.ranges;
+            showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
           }
-        }
+        } catch (e) {}
       }
+      window.__adRanges = adRanges;
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
       if (isMpv()) {
@@ -3050,16 +3041,12 @@
       // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
       if (compatEnabled() && /\.m3u8/i.test(playUrl)) {
-        // 过滤探测偶尔会慢（要拉上千个分片），若失败就退回普通探测：
-        // 宁可拿不到广告数，也不能让脏流漏掉转封装（否则声音会出问题）
-        let info = adInfo;
-        if (!info) {
-          info = await probeQuick(finalUrl, 20000, true);
-        }
+        // 用普通探测判断「是否有时间戳重置」即可（不需要过滤后的统计了）
+        let info = await probeQuick(finalUrl, 8000, false);
         if (!info || info.disc === undefined) {
           info = await probeQuick(finalUrl, 8000, false);
-          if (info && info.duration) compat.duration = info.duration;
         }
+        if (info && info.duration) compat.duration = info.duration;
         if (info && info.disc > 0) {
           playCompat(playUrl, resumeAt || 0);
           probeAndWarn(finalUrl, true);
@@ -3566,8 +3553,13 @@
 
     function updateControls() {
       maybeAutoNext();
-      notePlaybackProgress(isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0));
-      checkAdWatch();
+      // 播到广告区间就跳过去（区间由 /api/ads 预先给出，列表本身没被改动）
+      {
+        const p0 = isMpv()
+          ? (mpvState.position || 0)
+          : (compat.on ? compatPosition() : (pvVideo.currentTime || 0));
+        if (maybeSkipAd(p0)) return;
+      }
 
       if (isMpv()) {
         const dur = mpvState.duration || 0;

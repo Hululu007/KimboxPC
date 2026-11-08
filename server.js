@@ -846,6 +846,68 @@ async function fetchPlaylistMaybeMaster(url) {
 const filteredCache = new Map();
 const FILTERED_TTL = 5 * 60 * 1000;
 
+/* ---------- 广告区间分析（只算位置，不改播放列表） ----------
+   设计要点：绝不改写源列表，只返回「哪一段是广告」。
+   播放器播到该区间时自己跳过，因此时间轴完全保持原样，
+   不会出现进度错乱、加密源密钥失效等问题。 */
+function analyzeAdRanges(text) {
+  const chunks = splitByDiscontinuity(text);
+  if (chunks.length < 3) return { ranges: [], totalChunks: chunks.length, duration: 0 };
+
+  const infos = chunks.map(chunkInfo);
+  const totalDur = infos.reduce((a, b) => a + b.dur, 0);
+
+  // 计算每块的起始时间
+  let acc = 0;
+  const starts = infos.map(info => { const s = acc; acc += info.dur; return s; });
+
+  const picked = [];
+  for (let i = 1; i < chunks.length - 1; i++) {
+    const { dur, segs } = infos[i];
+    if (!(segs >= 1 && segs <= 30 && dur >= 5 && dur <= 90)) continue;
+    if (picked.some(p => p.idx === i - 1)) continue;          // 不与上一段相连
+    const need = Math.max(180, dur * 3);
+    const left = infos[i - 1], right = infos[i + 1];
+    if (!(left.segs > 0 && left.dur >= need)) continue;        // 两侧都应是长正片
+    if (!(right.segs > 0 && right.dur >= need)) continue;
+    picked.push({ idx: i, start: starts[i], end: starts[i] + dur, dur });
+  }
+
+  // 安全阀：数量或占比过大时视为误判，直接不跳过
+  const adDur = picked.reduce((a, b) => a + b.dur, 0);
+  if (picked.length > 6 || adDur > totalDur * 0.05) {
+    return { ranges: [], totalChunks: chunks.length, duration: Math.round(totalDur), rejected: true };
+  }
+
+  return {
+    ranges: picked.map(p => [Math.round(p.start * 100) / 100, Math.round(p.end * 100) / 100]),
+    totalChunks: chunks.length,
+    duration: Math.round(totalDur)
+  };
+}
+
+const adRangesCache = new Map();
+
+app.get('/api/ads', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  const hit = adRangesCache.get(url);
+  if (hit && Date.now() - hit.ts < FILTERED_TTL) return res.json(hit);
+  try {
+    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+    const r = analyzeAdRanges(text);
+    const out = { ...r, finalUrl, ts: Date.now() };
+    adRangesCache.set(url, out);
+    if (adRangesCache.size > 120) adRangesCache.delete(adRangesCache.keys().next().value);
+    if (r.ranges.length) {
+      console.log(`[广告] 标记 ${r.ranges.length} 段: ${r.ranges.map(x => Math.round(x[0]) + 's-' + Math.round(x[1]) + 's').join(', ')}`);
+    }
+    res.json(out);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 async function getFilteredPlaylist(url, forceRaw) {
   const key = (forceRaw ? 'raw:' : '') + url;
   const hit = filteredCache.get(key);
