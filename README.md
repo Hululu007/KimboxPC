@@ -215,7 +215,8 @@ node server.js
 
 1. **解除网络锁定**：右键 zip → 属性 → 勾选「解除锁定」再解压
 2. **跑体检脚本**：双击 `修复运行环境.bat`
-3. **装 VC++ 运行库**（若体检提示缺少）：
+3. **装 VC++ 运行库**（若体检提示缺少；**安装包已随包提供**在 	ools\VC_redist.x64.exe，
+   体检脚本会直接调用它，无需联网）：
 
    - x64：https://aka.ms/vs/17/release/vc_redist.x64.exe （24.4 MB，微软官方）
    - x86：https://aka.ms/vs/17/release/vc_redist.x86.exe
