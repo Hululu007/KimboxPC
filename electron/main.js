@@ -363,10 +363,12 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     }
     // 缓冲档位：用户可在界面上选 15 / 30 / 60 / 120 秒
     try {
-      const secs = Math.max(5, Math.min(180, Number(cacheSecs) || 30));
+      const secs = Math.max(5, Math.min(1200, Number(cacheSecs) || 30));
       native.setProp(i, 'cache-secs', String(secs));
-      // 前向缓存按秒数换算成字节上限（按 ~8Mbps 估算，留足余量）
-      const maxBytes = Math.round(secs * 8 * 1024 * 1024 / 8 * 1.2);
+      // 按 ~6Mbps 估算内存上限，夹在 32MB ~ 512MB 之间，避免 600 秒档吃掉太多内存
+      const MB = 1024 * 1024;
+      const est = Math.round(secs * 0.75 * MB);
+      const maxBytes = Math.max(32 * MB, Math.min(512 * MB, est));
       native.setProp(i, 'demuxer-max-bytes', String(maxBytes));
       native.setProp(i, 'demuxer-max-back-bytes', String(Math.round(maxBytes / 2)));
     } catch (e) {}
