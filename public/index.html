@@ -831,14 +831,18 @@
     .pv-osd span {
       position: absolute;
       color: #fff;
-      font-size: 17px;              /* 字号加大 */
+      font-size: 17px;
       font-weight: 500;
       line-height: 1.4;
-      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
-      background: rgba(0, 0, 0, 0.5);
-      padding: 4px 11px;
-      border-radius: 5px;
-      white-space: nowrap;
+      /* 不加背景框，靠描边+阴影保证任何画面上都看得清 */
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      white-space: pre;
+      text-shadow:
+        0 0 2px rgba(0, 0, 0, 0.95),
+        0 0 5px rgba(0, 0, 0, 0.85),
+        0 1px 3px rgba(0, 0, 0, 0.9);
     }
     .pv-osd .osd-tl { top: 14px; left: 16px; text-align: left; }
     .pv-osd .osd-tr { top: 14px; right: 16px; }
@@ -846,7 +850,7 @@
     .pv-osd .osd-bl { bottom: 26px; left: 16px; }
     .pv-osd .osd-br { bottom: 26px; right: 16px; }
     @media (max-width: 1100px) {
-      .pv-osd span { font-size: 15px; padding: 3px 9px; }
+      .pv-osd span { font-size: 15px; }
     }
 
     .pv-toast {
