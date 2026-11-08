@@ -1065,7 +1065,14 @@
           </label>
           <label class="audio-auto">
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
-            拦截插播广告（默认开启；关闭后完全用源原始列表，播不了时先关它）
+            拦截插播广告（默认开启；按区间自动跳过）
+          </label>
+          <label class="audio-auto">
+            跳过片头
+            <input type="number" id="skipIntroInput" min="0" max="300" step="5"
+                   onchange="saveSkipIntro(this.value)"
+                   style="width:58px;background:#12161b;color:#e6edf3;border:1px solid #2c3239;border-radius:5px;padding:2px 5px;">
+            秒（0 = 不跳；片头是广告的源用这个）
           </label>
         </div>
 
@@ -2605,6 +2612,7 @@
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
+      syncSkipIntroUI();
       document.body.style.overflow = 'hidden';
       updateVolumeUI();
       document.getElementById('mTitle').textContent = '加载中...';
@@ -2880,7 +2888,27 @@
     function toggleAdFilter(on) {
       try { localStorage.setItem('tvbox_adfilter', on ? '1' : '0'); } catch (e) {}
       syncAdFilterUI();
+      syncSkipIntroUI();
       showToast(on ? '已开启广告拦截（重新打开该集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
+    }
+
+    /* ---------- 跳过片头 ----------
+       有些源（如整集切片类）的广告是「片头 logo」，结构上无法识别，
+       直接让用户指定跳过前 N 秒，最直接可靠。 */
+    function skipIntroSec() {
+      try {
+        const v = Number(localStorage.getItem('tvbox_skip_intro') || 0);
+        return Number.isFinite(v) && v > 0 ? Math.min(v, 300) : 0;
+      } catch (e) { return 0; }
+    }
+    function saveSkipIntro(v) {
+      const n = Math.max(0, Math.min(300, Math.round(Number(v) || 0)));
+      try { localStorage.setItem('tvbox_skip_intro', String(n)); } catch (e) {}
+      showToast(n > 0 ? `已设置：每集自动跳过片头 ${n} 秒` : '已取消跳过片头', 2500);
+    }
+    function syncSkipIntroUI() {
+      const el = document.getElementById('skipIntroInput');
+      if (el) el.value = String(skipIntroSec());
     }
 
     /* ---------- 播放中跳过广告 ---------- */
@@ -2976,6 +3004,12 @@
         }
       }
 
+      // 跳过片头：没有续播进度时，从指定秒数开始（应对片头即广告的源）
+      const introSkip = (resumeAt && resumeAt > 1) ? 0 : skipIntroSec();
+      if (introSkip > 0) {
+        showToast(`已跳过片头 ${introSkip} 秒`, 2500);
+      }
+
       // 广告处理：开播前只「分析出广告在第几秒到第几秒」，**绝不改写播放列表**。
       // 播放时由播放器自己跳到区间末尾，时间轴保持原样 → 进度不会错乱、加密源也不受影响。
       const playUrl = finalUrl;
@@ -2993,7 +3027,7 @@
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
       if (isMpv()) {
-        openMpv(playUrl, resumeAt || 0);
+        openMpv(playUrl, (resumeAt && resumeAt > 1) ? resumeAt : introSkip);
         probeAndWarn(finalUrl, true);
         return;
       }
@@ -3011,7 +3045,7 @@
         }
         if (info && info.duration) compat.duration = info.duration;
         if (info && info.disc > 0) {
-          playCompat(playUrl, resumeAt || 0);
+          playCompat(playUrl, (resumeAt && resumeAt > 1) ? resumeAt : introSkip);
           probeAndWarn(finalUrl, true);
           // 转封装的拖动要重启 ffmpeg（实测 10~16 秒），提示可换更快的内核
           if (!window.__dirtyHintShown) {
