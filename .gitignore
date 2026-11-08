@@ -39,3 +39,4 @@ _survey.*
 _boot.*
 _*.js
 v-*.png
+data/adfilter.json

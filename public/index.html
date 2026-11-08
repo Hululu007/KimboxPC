@@ -2880,6 +2880,34 @@
      * 找一条「地址直接是 m3u8」的备用线路。
      * 不少站点的第一条线路是网页壳（常常 404），但同一部片还有 m3u8 直链线路。
      */
+    /* ---------- 广告过滤自愈看门狗 ----------
+       如果用了过滤后的播放列表却在 15 秒内毫无播放进度，
+       判定为「过滤把这条流弄坏了」：上报服务端关闭该域名过滤，并原样重试一次。 */
+    let adWatch = null;
+
+    function startAdWatch(origUrl) {
+      adWatch = { orig: origUrl, t0: Date.now(), done: false, retried: false };
+    }
+    function notePlaybackProgress(pos) {
+      if (adWatch && pos > 3) adWatch.done = true;
+    }
+    function checkAdWatch() {
+      if (!adWatch || adWatch.done || adWatch.retried) return;
+      if (Date.now() - adWatch.t0 < 15000) return;
+      adWatch.retried = true;
+      const orig = adWatch.orig;
+      try {
+        fetch('/api/adfilter/report', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: orig, reason: '过滤后 15 秒无播放进度' })
+        }).catch(() => {});
+      } catch (e) {}
+      window.__forceRawFor = orig;
+      showToast('广告过滤可能影响了这条线路，已自动关闭过滤并重试', 4000);
+      setTimeout(() => { try { playEpisodeByIndex(currentEpIdx); } catch (e) {} }, 800);
+    }
+
     function pickDirectLine() {
       if (!currentDetail || !currentDetail.playSources) return null;
       const cur = (currentDetail.playSources[currentSourceIdx] || {}).episodes || [];
@@ -2948,13 +2976,16 @@
       // 播放器拿到的是干净列表，广告不会被加载，也不会中途打断
       let playUrl = finalUrl;
       let adInfo = null;
+      adWatch = null;
       if (/\.m3u8/i.test(finalUrl)) {
-        adInfo = await probeQuick(finalUrl, 20000, true);
+        const forceRaw = window.__forceRawFor === finalUrl;
+        adInfo = forceRaw ? null : await probeQuick(finalUrl, 20000, true);
         // 必须是绝对地址：mpv 拿到相对路径会当成本地文件打开而失败
-        playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}`;
+        playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}${forceRaw ? '&raw=1' : ''}`;
         if (adInfo && adInfo.adRemoved > 0) {
           showToast(`已过滤 ${adInfo.adRemoved} 处插播广告，直接从正片开始`, 3200);
         }
+        if (!forceRaw) startAdWatch(finalUrl);
       }
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
@@ -3486,6 +3517,8 @@
 
     function updateControls() {
       maybeAutoNext();
+      notePlaybackProgress(isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0));
+      checkAdWatch();
 
       if (isMpv()) {
         const dur = mpvState.duration || 0;

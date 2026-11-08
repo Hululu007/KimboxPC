@@ -672,9 +672,79 @@ function toAbsolute(line, base) {
  *  - 命中块数不超过总块数 25%，且最多 12 个
  *  - 过滤后总时长不得低于原始的 50%
  */
+/* ---------- 每站「广告过滤」开关台账（失败自动关闭，可随时重置） ---------- */
+const ADFILTER_FILE = path.join(__dirname, 'data', 'adfilter.json');
+let adFilterLedger = { off: {}, updatedAt: 0 };
+
+function loadAdFilterLedger() {
+  try {
+    const raw = fs.readFileSync(ADFILTER_FILE, 'utf8');
+    const j = JSON.parse(raw);
+    if (j && typeof j === 'object' && j.off && typeof j.off === 'object') adFilterLedger = j;
+  } catch (e) { /* 首次运行没有文件，正常 */ }
+}
+function saveAdFilterLedger() {
+  try {
+    fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+    adFilterLedger.updatedAt = Date.now();
+    fs.writeFileSync(ADFILTER_FILE, JSON.stringify(adFilterLedger, null, 2), 'utf8');
+  } catch (e) {}
+}
+function hostOf(u) { try { return new URL(u).host.toLowerCase(); } catch (e) { return ''; } }
+function isFilterDisabled(host) { return !!adFilterLedger.off[host]; }
+function disableFilterFor(host, reason) {
+  if (!host) return;
+  adFilterLedger.off[host] = { reason: String(reason || '').slice(0, 200), at: Date.now() };
+  saveAdFilterLedger();
+  console.log(`[广告过滤] 已对该域名关闭过滤（自动学习）：${host} — ${reason}`);
+}
+loadAdFilterLedger();
+
+/**
+ * 过滤结果自检：任何一项不满足就放弃过滤、原样返回。
+ * 目标：宁可少删广告，也绝不弄坏一个能播的源。
+ */
+function validateFiltered(origText, newText) {
+  const o = collectStats(origText);
+  const n = collectStats(newText);
+  if (!/^#EXTM3U/.test(newText.trim())) return '缺少 EXTM3U 头';
+  if (o.endlist && !/#EXT-X-ENDLIST/i.test(newText)) return '丢失 ENDLIST';
+  if (n.segments < o.segments * 0.9) return `分片过少 ${n.segments}/${o.segments}`;
+  if (n.duration < o.duration * 0.9 || n.duration > o.duration + 1) return `时长异常 ${Math.round(n.duration)}/${Math.round(o.duration)}`;
+  if (n.badUri > 0) return `存在非绝对地址 ${n.badUri} 个`;
+  if (n.dupAdjacent > 0) return `相邻重复分片 ${n.dupAdjacent} 处`;
+  return '';
+}
+
+function collectStats(text) {
+  const lines = text.split(/\r?\n/);
+  let segments = 0, duration = 0, badUri = 0, dupAdjacent = 0, prev = '';
+  for (const ln of lines) {
+    const s = ln.trim();
+    if (s.startsWith('#EXTINF')) { duration += parseFloat(s.split(':')[1]) || 0; segments++; }
+    else if (s && !s.startsWith('#')) {
+      if (!/^https?:\/\//i.test(s)) badUri++;
+      if (s === prev) dupAdjacent++;
+      prev = s;
+    }
+  }
+  return { segments, duration, badUri, dupAdjacent, endlist: /#EXT-X-ENDLIST/i.test(text) };
+}
+
+/**
+ * 返回 { text, removed, keptChunks, totalChunks, skipped, reason }
+ *
+ * 只删「教科书式插播」：一大段正片 → 短广告块 → 一大段正片。
+ * 判据（全部满足才删）：
+ *  - 块时长 5~90 秒，1~30 个分片，且不与另一段广告相邻
+ *  - 左右相邻块都 ≥ max(180秒, 广告块时长×3)，即明显是正片
+ *  - 广告块总数 ≤ 6，占总量 ≤ 5%
+ *  - 生成的新列表通过 validateFiltered 自检
+ */
 function filterAdChunks(text, baseUrl) {
   const chunks = splitByDiscontinuity(text);
-  if (chunks.length < 3) return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length };
+  const base = { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length };
+  if (chunks.length < 3) return { ...base, skipped: true, reason: '块数不足' };
 
   const infos = chunks.map(chunkInfo);
   const totalDur = infos.reduce((a, b) => a + b.dur, 0);
@@ -683,28 +753,24 @@ function filterAdChunks(text, baseUrl) {
   let removed = 0;
   for (let i = 1; i < chunks.length - 1; i++) {
     const { dur, segs } = infos[i];
-    if (!(segs > 0 && dur >= 5 && dur <= 120)) continue;
+    if (!(segs >= 1 && segs <= 30 && dur >= 5 && dur <= 90)) continue;
+    if (isAd[i - 1]) continue;                     // 不与上一段广告相连
+    const need = Math.max(180, dur * 3);
     const left = infos[i - 1], right = infos[i + 1];
-    if (!(left.segs > 0 && left.dur > 180)) continue;
-    if (!(right.segs > 0 && right.dur > 180)) continue;
+    if (!(left.segs > 0 && left.dur >= need)) continue;
+    if (!(right.segs > 0 && right.dur >= need)) continue;
     isAd[i] = true;
     removed++;
   }
 
   const adDur = infos.reduce((a, b, i) => (isAd[i] ? a + b.dur : a), 0);
-  // 块数少时（如 9 块里夹着 3 段广告）比例规则会误判，只在块数较多时才看比例
-  const tooMany = removed > 12 || (chunks.length >= 20 && removed > chunks.length * 0.25);
-  if (removed === 0 || tooMany || (totalDur - adDur) < totalDur * 0.5) {
-    return { text, removed: 0, keptChunks: chunks.length, totalChunks: chunks.length, skipped: true };
-  }
+  if (removed === 0) return { ...base, skipped: true, reason: '无插播特征' };
+  if (removed > 6) return { ...base, skipped: true, reason: `广告块过多 ${removed}` };
+  if (adDur > totalDur * 0.05) return { ...base, skipped: true, reason: `广告占比过高 ${(adDur / totalDur * 100).toFixed(1)}%` };
 
   // 重建：第 0 块保留原样（含头部标签），后续保留块之间补回 discontinuity
   const out = [];
-  const headerLines = [];
-  for (const ln of chunks[0]) headerLines.push(ln);
-
-  if (!isAd[0]) out.push(...headerLines);
-  else out.push(...headerLines.filter(l => /^#EXT-X-(VERSION|TARGETDURATION|MEDIA|INDEPENDENT|PLAYLIST)/i.test(l.trim())));
+  out.push(...chunks[0].map(l => (l.trim() && !l.trim().startsWith('#') ? toAbsolute(l, baseUrl) : l)));
 
   for (let i = 1; i < chunks.length; i++) {
     if (isAd[i]) continue;
@@ -717,7 +783,15 @@ function filterAdChunks(text, baseUrl) {
     out.push('#EXT-X-DISCONTINUITY');
     out.push(...body);
   }
-  return { text: out.join('\n') + '\n', removed, keptChunks: chunks.length - removed, totalChunks: chunks.length };
+  const newText = out.join('\n') + '\n';
+
+  const bad = validateFiltered(text, newText);
+  if (bad) {
+    console.log(`[广告过滤] 自检未通过，放弃过滤：${bad}`);
+    return { ...base, skipped: true, reason: '自检未通过: ' + bad };
+  }
+
+  return { text: newText, removed, keptChunks: chunks.length - removed, totalChunks: chunks.length };
 }
 
 // 解析 master → 取第一个变体（与 probe 逻辑一致）
@@ -750,44 +824,88 @@ async function fetchPlaylistMaybeMaster(url) {
 const filteredCache = new Map();
 const FILTERED_TTL = 5 * 60 * 1000;
 
-async function getFilteredPlaylist(url) {
-  const hit = filteredCache.get(url);
+async function getFilteredPlaylist(url, forceRaw) {
+  const key = (forceRaw ? 'raw:' : '') + url;
+  const hit = filteredCache.get(key);
   if (hit && Date.now() - hit.ts < FILTERED_TTL) return hit;
+
   const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
-  const f = filterAdChunks(text, finalUrl);
+  const host = hostOf(finalUrl) || hostOf(url);
+
+  // 该域名曾被判定为「过滤会出问题」→ 直接原样返回（只把地址补全成绝对路径）
+  let f;
+  if (forceRaw || isFilterDisabled(host)) {
+    const absolutized = text.split(/\r?\n/)
+      .map(l => (l.trim() && !l.trim().startsWith('#') ? toAbsolute(l, finalUrl) : l))
+      .join('\n');
+    f = { text: absolutized, removed: 0, totalChunks: 0, skipped: true, reason: forceRaw ? '强制原样' : '该域名已关闭过滤' };
+  } else {
+    f = filterAdChunks(text, finalUrl);
+  }
+
   const infs = [...f.text.matchAll(/#EXTINF:([\d.]+)/g)].map(m => parseFloat(m[1]) || 0);
   const out = {
     text: f.text,
-    removed: f.removed,
-    totalChunks: f.totalChunks,
+    removed: f.removed || 0,
+    totalChunks: f.totalChunks || 0,
     skipped: !!f.skipped,
+    reason: f.reason || '',
+    host,
     disc: (f.text.match(/#EXT-X-DISCONTINUITY\b/g) || []).length,
     segments: infs.length,
     duration: Math.round(infs.reduce((a, b) => a + b, 0)),
     finalUrl,
     ts: Date.now()
   };
-  filteredCache.set(url, out);
-  if (filteredCache.size > 60) filteredCache.delete(filteredCache.keys().next().value);
+  filteredCache.set(key, out);
+  if (filteredCache.size > 120) filteredCache.delete(filteredCache.keys().next().value);
   return out;
 }
 
 app.get('/api/playlist', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  const forceRaw = String(req.query.raw || '') === '1';
   try {
-    const r = await getFilteredPlaylist(url);
+    const r = await getFilteredPlaylist(url, forceRaw);
     if (r.removed > 0) {
       console.log(`[广告过滤] 剔除 ${r.removed}/${r.totalChunks} 块: ${String(r.finalUrl).slice(-50)}`);
     } else if (r.skipped) {
-      console.log(`[广告过滤] 跳过（${r.totalChunks} 块，判定为整集切片而非插播）: ${String(r.finalUrl).slice(-50)}`);
+      console.log(`[广告过滤] 未过滤（${r.reason || '无特征'}）: ${String(r.finalUrl).slice(-50)}`);
     }
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Ad-Removed', String(r.removed || 0));
+    res.setHeader('X-Ad-Skipped', r.skipped ? '1' : '0');
     res.send(r.text);
   } catch (e) {
     res.status(502).json({ error: '获取播放列表失败: ' + e.message });
   }
+});
+
+/* ---------- 自愈：播放器报告「用了过滤列表出问题」→ 对该域名永久关掉过滤 ---------- */
+app.post('/api/adfilter/report', express.json(), (req, res) => {
+  const url = String((req.body && req.body.url) || '').trim();
+  const reason = String((req.body && req.body.reason) || '播放异常').slice(0, 200);
+  const host = hostOf(url);
+  if (!host) return res.status(400).json({ error: '缺少 url' });
+  disableFilterFor(host, reason);
+  // 清掉该 URL 的缓存，下次会用原样列表
+  for (const k of [...filteredCache.keys()]) {
+    if (k.includes(host)) filteredCache.delete(k);
+  }
+  res.json({ ok: true, host, disabled: true });
+});
+
+app.get('/api/adfilter', (req, res) => {
+  res.json({ off: adFilterLedger.off, updatedAt: adFilterLedger.updatedAt });
+});
+
+app.post('/api/adfilter/reset', express.json(), (req, res) => {
+  adFilterLedger = { off: {}, updatedAt: Date.now() };
+  saveAdFilterLedger();
+  filteredCache.clear();
+  res.json({ ok: true, off: {} });
 });
 
 /* ==================== 同片源聚合（按延迟排序） ==================== */
