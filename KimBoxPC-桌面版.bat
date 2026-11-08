@@ -4,6 +4,9 @@ setlocal
 title KimBoxPC 桌面版
 cd /d "%~dp0"
 
+rem 若继承到 ELECTRON_RUN_AS_NODE，Electron 会被当成纯 Node 运行并直接崩溃
+set "ELECTRON_RUN_AS_NODE="
+
 set "APP=%~dp0"
 if "%APP:~-1%"=="\" set "APP=%APP:~0,-1%"
 set "EXE=%~dp0node_modules\electron\dist\electron.exe"

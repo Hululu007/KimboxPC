@@ -40,3 +40,5 @@ _boot.*
 _*.js
 v-*.png
 data/adfilter.json
+_l*.log
+_l*.err

@@ -45,13 +45,45 @@ let lastKnownPosition = 0;   // 见过的最远播放位置（中途 EOF 时 tim
 let playbackStarted = false;
 
 /* ---------- 内嵌服务端 ---------- */
-function startServer() {
+// 端口上是否已有我们自己的服务在跑（上次残留的实例）
+function serverAlive() {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const req = http.get({ host: '127.0.0.1', port: PORT, path: '/api/version', timeout: 1200 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function startServer() {
   process.env.TVBOX_EMBED = '1';
   process.env.PORT = String(PORT);   // 与服务端共用同一个端口，避免读取到不同值
+
+  // 端口上已有可用服务 → 直接复用，避免"起不来又白屏"
+  if (await serverAlive()) {
+    console.log(`[shell] 端口 ${PORT} 上已有服务，直接复用`);
+    return;
+  }
+
   try {
-    require(path.join(ROOT, 'server.js'));
+    const srv = require(path.join(ROOT, 'server.js'));
+    void srv;
   } catch (e) {
     console.error('[shell] 服务端启动失败:', e.message);
+    // 端口被占用（常见于残留进程）→ 明确告诉用户，而不是白屏
+    if (/EADDRINUSE/i.test(String(e.message))) {
+      try {
+        dialog.showErrorBox(
+          'KimBoxPC 启动失败',
+          `端口 ${PORT} 已被占用，通常是上次没完全退出的残留进程。\n\n` +
+          '请打开任务管理器，结束所有 electron.exe 进程后重新启动。\n' +
+          '（也可以把 port.txt 里的端口改成别的数字）'
+        );
+      } catch (err) {}
+    }
   }
 }
 
@@ -144,6 +176,18 @@ function createMainWindow() {
   });
   mainWin.setMenuBarVisibility(false);
   if (ws.maximized) { try { mainWin.maximize(); } catch (e) {} }
+
+  // 加载失败时不要再静默白屏：给出明确原因和下一步
+  mainWin.webContents.on('did-fail-load', (e, code, desc, url) => {
+    if (code === -3) return;   // -3 = 用户主动中止，忽略
+    const hint = code === -102
+      ? `本地服务没有启动（端口 ${PORT} 可能被占用）\n\n请先关闭所有 KimBoxPC 窗口，或在任务管理器结束残留的 electron.exe 后重试。`
+      : `无法打开界面：${desc}（${code}）\n\n地址：${url}`;
+    console.error('[shell] 界面加载失败:', code, desc, url);
+    try {
+      dialog.showErrorBox('KimBoxPC 启动失败', hint);
+    } catch (err) {}
+  });
 
   // 尺寸/位置变化后延迟保存，避免拖动时频繁写盘
   let saveTimer = null;
@@ -414,10 +458,30 @@ ipcMain.handle('mpv:resize', (evt, { width, height }) => {
 app.setAppUserModelId('KimBoxPC');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
-app.whenReady().then(() => {
-  startServer();
-  setTimeout(createMainWindow, 600);
-});
+// 单实例锁：防止「用旧窗口占着端口、新窗口起不来」导致看起来打不开
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  // 已有实例在跑 → 直接退出，由已有实例把窗口提到前台
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // 用户又双击了一次：把已有窗口还原并聚焦
+    try {
+      if (mainWin) {
+        if (mainWin.isMinimized()) mainWin.restore();
+        mainWin.show();
+        mainWin.focus();
+      } else {
+        createMainWindow();
+      }
+    } catch (e) {}
+  });
+
+  app.whenReady().then(async () => {
+    await startServer();
+    setTimeout(createMainWindow, 300);
+  });
+}
 
 app.on('window-all-closed', () => {
   stopPlayback();

@@ -1059,6 +1059,10 @@
             <input type="checkbox" id="autoNextChk" onchange="saveAutoNext(this.checked)">
             自动连播下一集（默认开启，本集播完自动接下一集）
           </label>
+          <label class="audio-auto">
+            <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
+            拦截插播广告（默认开启；关闭后完全用源原始列表，最稳）
+          </label>
         </div>
 
 
@@ -2604,6 +2608,7 @@
     async function openDetail(id, siteKey, targetEpIdx = null) {
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
+      syncAdFilterUI();
       document.body.style.overflow = 'hidden';
       updateVolumeUI();
       document.getElementById('mTitle').textContent = '加载中...';
@@ -2885,6 +2890,21 @@
        判定为「过滤把这条流弄坏了」：上报服务端关闭该域名过滤，并原样重试一次。 */
     let adWatch = null;
 
+    /* ---------- 广告过滤开关（用户可一键关掉，关掉后完全用原始列表） ---------- */
+    function adFilterEnabled() {
+      try { return localStorage.getItem('tvbox_adfilter') !== '0'; } catch (e) { return true; }
+    }
+    // 打开播放页时回显开关状态
+    function syncAdFilterUI() {
+      const el = document.getElementById('adFilterChk');
+      if (el) el.checked = adFilterEnabled();
+    }
+
+    function toggleAdFilter(on) {
+      try { localStorage.setItem('tvbox_adfilter', on ? '1' : '0'); } catch (e) {}
+      showToast(on ? '已开启广告拦截（重新打开选集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
+    }
+
     function startAdWatch(origUrl) {
       adWatch = { orig: origUrl, t0: Date.now(), done: false, retried: false };
     }
@@ -2978,7 +2998,8 @@
       let adInfo = null;
       adWatch = null;
       if (/\.m3u8/i.test(finalUrl)) {
-        const forceRaw = window.__forceRawFor === finalUrl;
+        // 用户关掉广告拦截时，直接走原始列表（最稳，绝不改动源）
+        const forceRaw = window.__forceRawFor === finalUrl || !adFilterEnabled();
         adInfo = forceRaw ? null : await probeQuick(finalUrl, 20000, true);
         // 必须是绝对地址：mpv 拿到相对路径会当成本地文件打开而失败
         playUrl = `${location.origin}/api/playlist?url=${encodeURIComponent(finalUrl)}${forceRaw ? '&raw=1' : ''}`;
