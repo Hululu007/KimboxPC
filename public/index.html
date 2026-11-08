@@ -1146,8 +1146,9 @@
               <option value="30" selected>中（30 秒）</option>
               <option value="60">大（60 秒）</option>
               <option value="120">超大（120 秒）</option>
+              <option value="180">3 分钟（180 秒）</option>
+              <option value="240">4 分钟（240 秒）</option>
               <option value="300">5 分钟（300 秒）</option>
-              <option value="600">10 分钟（600 秒）</option>
             </select>
           </label>
         </div>
@@ -3100,7 +3101,7 @@
     function cacheSecs() {
       try {
         const v = Number(localStorage.getItem('tvbox_cache') || 30);
-        return [15, 30, 60, 120, 300, 600].includes(v) ? v : 30;
+        return [15, 30, 60, 120, 180, 240, 300].includes(v) ? v : 30;
       } catch (e) { return 30; }
     }
     function saveCacheLevel(v) {

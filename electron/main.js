@@ -363,7 +363,7 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     }
     // 缓冲档位：用户可在界面上选 15 / 30 / 60 / 120 秒
     try {
-      const secs = Math.max(5, Math.min(1200, Number(cacheSecs) || 30));
+      const secs = Math.max(5, Math.min(600, Number(cacheSecs) || 30));
       native.setProp(i, 'cache-secs', String(secs));
       // 按 ~6Mbps 估算内存上限，夹在 32MB ~ 512MB 之间，避免 600 秒档吃掉太多内存
       const MB = 1024 * 1024;
