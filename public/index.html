@@ -9,6 +9,7 @@
   <style>
     :root {
       --bg: #111418;
+      color-scheme: dark;
       --card-bg: #1b1f24;
       --accent: #e50914;
       --accent-hover: #f40612;
@@ -101,6 +102,28 @@
     }
     input:focus, select:focus {
       border-color: var(--accent);
+    }
+
+    /* 下拉展开后的列表：必须显式给底色和字色，否则沿用系统白底 + 我们的浅色字，看不清 */
+    select {
+      color-scheme: dark;   /* 让原生弹出层、滚动条也走暗色 */
+    }
+    select option {
+      background-color: #1b1f24;
+      color: #e6edf3;
+    }
+    select option:checked,
+    select option:hover {
+      background-color: var(--accent);
+      color: #ffffff;
+    }
+    select optgroup {
+      background-color: #12161b;
+      color: #9fb3c0;
+    }
+    /* 禁用项（如加固虫包）也要能读清 */
+    select option:disabled {
+      color: #7a8794;
     }
 
     button {
