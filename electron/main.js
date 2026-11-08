@@ -13,8 +13,24 @@ const fs = require('fs');
  *   音频由 libmpv 直接输出到声卡，不经过浏览器 MSE。
  */
 
-const PORT = Number(process.env.PORT || 3980);
 const ROOT = path.join(__dirname, '..');
+
+// 端口来源与服务端保持一致：环境变量 PORT > port.txt > 3980
+function readPort() {
+  const pick = (v) => {
+    const n = Number(String(v || '').trim());
+    return Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
+  };
+  const fromEnv = pick(process.env.PORT);
+  if (fromEnv) return fromEnv;
+  try {
+    const raw = fs.readFileSync(path.join(ROOT, 'port.txt'), 'utf8').split(/\r?\n/)[0];
+    const fromFile = pick(raw);
+    if (fromFile) return fromFile;
+  } catch (e) {}
+  return 3980;
+}
+const PORT = readPort();
 
 let mainWin = null;
 let native = null;          // libmpv 原生模块
@@ -30,6 +46,7 @@ let playbackStarted = false;
 /* ---------- 内嵌服务端 ---------- */
 function startServer() {
   process.env.TVBOX_EMBED = '1';
+  process.env.PORT = String(PORT);   // 与服务端共用同一个端口，避免读取到不同值
   try {
     require(path.join(ROOT, 'server.js'));
   } catch (e) {
