@@ -477,6 +477,23 @@
     .player-view.native-fs .pv-stage { flex: 1 1 auto; height: auto; }
     .player-view.native-fs #mpvCanvas { object-fit: contain; }
 
+    /* 原生全屏：控制条浮在视频上，隐藏时不重排画面 */
+    .player-view.native-fs .pv-controls {
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      z-index: 25;
+      background: linear-gradient(0deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0));
+      border-top: none;
+      transition: opacity 0.25s ease;
+    }
+    .player-view.native-fs .pv-controls.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    /* 全屏且鼠标静止：连光标一起隐藏 */
+    .player-view.hide-cursor,
+    .player-view.hide-cursor * { cursor: none !important; }
+
     .player-view:fullscreen .pv-controls {
       position: absolute;
       left: 0; right: 0; bottom: 0;
@@ -2106,6 +2123,9 @@
       if (view) view.classList.toggle('native-fs', on);
       document.body.classList.toggle('native-fs', on);
 
+      // 进全屏先让控制条可见，之后按「鼠标静止 2.5 秒」自动隐藏；退出则立即恢复
+      if (on) showBars(); else hideBars();
+
       // 舞台尺寸变了，只需重建渲染缓冲，播放位置不受影响
       setTimeout(() => {
         if (!isMpv() || !isNativeShell()) return;
@@ -3062,22 +3082,35 @@
       if (nativeFullscreen && isNativeShell()) { try { window.kimbox.setFullscreen(false); } catch (e) {} nativeFullscreen = false; document.getElementById('playerView').classList.remove('native-fs'); }
     }
 
-    // 全屏时控制条自动隐藏；窗口模式下始终显示
+    // 全屏且播放中：鼠标静止 2.5 秒后自动隐藏控制条与光标；窗口模式始终显示
     let barTimer = null;
+
+    function inFullscreenNow() {
+      return nativeFullscreen || !!document.fullscreenElement;
+    }
+    function playerIsPlaying() {
+      return isMpv() ? !mpvState.paused : !pvVideo.paused;
+    }
     function showBars() {
       clearTimeout(barTimer);
       const ctrls = document.getElementById('pvControls');
-      if (!ctrls) return;
+      const view = document.getElementById('playerView');
+      if (!ctrls || !view) return;
       ctrls.classList.remove('hidden');
-      const v = document.getElementById('h5Player');
-      if (document.fullscreenElement && v && !v.paused) {
-        barTimer = setTimeout(() => ctrls.classList.add('hidden'), 2500);
+      view.classList.remove('hide-cursor');
+      if (inFullscreenNow() && playerIsPlaying()) {
+        barTimer = setTimeout(() => {
+          ctrls.classList.add('hidden');
+          view.classList.add('hide-cursor');
+        }, 2500);
       }
     }
     function hideBars() {
       clearTimeout(barTimer);
       const ctrls = document.getElementById('pvControls');
+      const view = document.getElementById('playerView');
       if (ctrls) ctrls.classList.remove('hidden');
+      if (view) view.classList.remove('hide-cursor');
     }
 
     // 选集面板折叠
