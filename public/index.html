@@ -2876,6 +2876,24 @@
       }, 800);
     }
 
+    /**
+     * 找一条「地址直接是 m3u8」的备用线路。
+     * 不少站点的第一条线路是网页壳（常常 404），但同一部片还有 m3u8 直链线路。
+     */
+    function pickDirectLine() {
+      if (!currentDetail || !currentDetail.playSources) return null;
+      const cur = (currentDetail.playSources[currentSourceIdx] || {}).episodes || [];
+      const curEp = cur.length ? Math.min(currentEpIdx || 0, cur.length - 1) : 0;
+      for (let i = 0; i < currentDetail.playSources.length; i++) {
+        if (i === currentSourceIdx) continue;
+        const s = currentDetail.playSources[i];
+        if (!s.episodes || !s.episodes.length) continue;
+        if (!/\.m3u8/i.test(s.episodes[0].url)) continue;
+        return { idx: i, name: s.sourceName, ep: Math.min(curEp, s.episodes.length - 1) };
+      }
+      return null;
+    }
+
     async function playEpisode(url, resumeAt = 0) {
       const token = ++playToken;
       eofHandled = false;
@@ -2907,6 +2925,20 @@
           finalUrl = r.url;
         } catch (e) {
           if (token !== playToken) return;
+          // 失败兜底：有些站点的网页线路是死的（404），但同一部片还有 m3u8 直链线路。
+          // 自动切到那条直链重试一次，用户无感。
+          const alt = pickDirectLine();
+          if (alt) {
+            const src = currentDetail.playSources[alt.idx];
+            const epIdx = Math.min(currentEpIdx || 0, src.episodes.length - 1);
+            showToast(`当前线路无法解析，已自动切换到「${alt.name}」线路`, 3500);
+            currentSourceIdx = alt.idx;
+            currentEpIdx = epIdx;
+            document.querySelectorAll('.source-tab').forEach((el, i) => el.classList.toggle('active', i === alt.idx));
+            renderEpisodes(false);
+            playEpisode(src.episodes[epIdx].url, 0);
+            return;
+          }
           showToast('这个源无法直接播放：' + e.message + '，建议换一个源', 6000);
           return;
         }
