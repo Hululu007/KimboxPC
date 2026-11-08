@@ -1927,23 +1927,21 @@
     /* ---------- 播放列表探测（带缓存，用于决定是否需要转封装） ---------- */
     const probeMemo = new Map();
 
-    async function probeQuick(url, timeoutMs = 6000, filtered = false) {
+    async function probeQuick(url, timeoutMs = 6000) {
       if (!url) return null;
-      const key = (filtered ? 'f:' : '') + url;
-      if (probeMemo.has(key)) return probeMemo.get(key);
+      if (probeMemo.has(url)) return probeMemo.get(url);
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-        const q = `/api/probe?url=${encodeURIComponent(url)}${filtered ? '&filter=1' : ''}`;
-        const r = await fetch(q, { signal: ctrl.signal });
+        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}`, { signal: ctrl.signal });
         clearTimeout(timer);
         const d = await r.json();
         if (d && d.duration) compat.duration = d.duration;
-        probeMemo.set(key, d);
+        probeMemo.set(url, d);
         if (probeMemo.size > 60) probeMemo.delete(probeMemo.keys().next().value);
         return d;
       } catch (e) {
-        // 探测失败不要缓存（否则这个地址整场都不会再尝试过滤）
+        // 探测失败不要缓存（否则这个地址整场都不会再重试）
         return null;
       }
     }
@@ -2982,7 +2980,7 @@
       // 播放时由播放器自己跳到区间末尾，时间轴保持原样 → 进度不会错乱、加密源也不受影响。
       const playUrl = finalUrl;
       let adRanges = [];
-      if (/\.m3u8/i.test(finalUrl) && adFilterEnabled() && window.__forceRawFor !== finalUrl) {
+      if (/\.m3u8/i.test(finalUrl) && adFilterEnabled()) {
         try {
           const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}`)).json();
           if (r && Array.isArray(r.ranges) && r.ranges.length) {
@@ -3543,7 +3541,6 @@
         : (isFinite(pvVideo.duration) ? pvVideo.duration : 0);
       const pos = compat.on ? compatPosition() : pvVideo.currentTime;
 
-      // 浏览器引擎 / 兼容模式也做跳变检测（全屏时同样生效）
 
       if (!isSeekDragging() && !seeking) {
         const durLabel = compat.on
