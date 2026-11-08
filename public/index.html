@@ -1948,6 +1948,9 @@
     // 网页只负责浏览/选集/进度控制，通过 /api/mpv/* 驱动 mpv。
 
     const mpvState = { running: false, position: 0, duration: 0, paused: true, volume: 100, title: '' };
+    let lastMpvPos = 0;        // 上一次采样位置（用于检测时间轴跳变）
+    let mpvSelfSeekAt = 0;     // 自己刚触发过 seek 的时间戳
+    let adSkipAt = 0;          // 上次处理「疑似插播广告」的时间戳
     let mpvTimer = null;
 
     function engineMode() {
@@ -2234,7 +2237,24 @@
           if (!s) return;
           mpvState.running = !!s.running;
           mpvState.paused = !!s.paused;
-          mpvState.position = s.position || 0;
+          const newPos = s.position || 0;
+
+        // 时间轴跳变检测：位置突然倒退很多，通常是源在中途插了广告/重置了时间轴
+        const selfSeek = Date.now() - mpvSelfSeekAt < 4000;
+        if (!selfSeek && lastMpvPos > 60 && newPos < lastMpvPos - 45 && !s.paused) {
+          if (Date.now() - adSkipAt > 60000) {
+            adSkipAt = Date.now();
+            showToast('检测到播放位置跳变（疑似插播广告），已尝试回到原进度', 3500);
+            const back = lastMpvPos + 2;
+            lastMpvPos = back;
+            mpvSelfSeekAt = Date.now();
+            mpvCmd('seek', [back, 'absolute']);
+            return;
+          }
+        }
+        if (newPos > lastMpvPos || Math.abs(newPos - lastMpvPos) < 45) lastMpvPos = newPos;
+
+        mpvState.position = newPos;
           mpvState.duration = s.duration || 0;
           mpvState.title = s.title || '';
           if (typeof s.volume === 'number') { mpvState.volume = s.volume; updateVolumeUI(); }
@@ -3200,7 +3220,7 @@
 
     function seekTo(target) {
       if (!isFinite(target) || target < 0) return;
-      if (isMpv()) { mpvCmd('seek', [target, 'absolute']); return; }
+      if (isMpv()) { mpvSelfSeekAt = Date.now(); lastMpvPos = target; mpvCmd('seek', [target, 'absolute']); return; }
       if (compat.on) { compatSeek(target); return; }
       const wasPlaying = !pvVideo.paused;
 

@@ -41,6 +41,7 @@ let renderW = 1280;
 let renderH = 720;
 let lastFrameAt = 0;
 let lastKnownDuration = 0;
+let lastKnownPosition = 0;   // 见过的最远播放位置（中途 EOF 时 time-pos 会归零）
 let playbackStarted = false;
 
 /* ---------- 内嵌服务端 ---------- */
@@ -327,6 +328,7 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     startRenderLoop();
     frameCount = 0;
     lastKnownDuration = 0;
+    lastKnownPosition = 0;
     playbackStarted = true;
     return { ok: true, render: `${renderW}x${renderH}` };
   } catch (e) {
@@ -358,10 +360,15 @@ ipcMain.handle('mpv:state', () => {
 
   const dur = Number(p('duration') || 0);
   if (dur > 0) lastKnownDuration = dur;
+  const posNow = Number(p('time-pos') || 0);
+  if (posNow > lastKnownPosition) lastKnownPosition = posNow;
   const idleNow = p('idle-active') === 'yes' || p('idle-active') === true || p('idle-active') === 1;
   const eofNow = (() => { const v = p('eof-reached'); return v === 'yes' || v === 'true' || v === 1 || v === true; })();
-  // 播完后 mpv 会卸载当前文件回到 idle，此时 eof-reached 已复位，只能靠「曾经播过且现在 idle」判断
-  const ended = eofNow || (idleNow && playbackStarted && lastKnownDuration > 0);
+  // 播完后 mpv 会卸载当前文件回到 idle，此时 eof-reached 已复位，只能靠「曾经播过且现在 idle」判断。
+  // 但中途出现流中断/插播广告也会让 mpv 短暂 idle 或 EOF —— 必须再要求「位置确实已到结尾附近」，
+  // 否则会在第 8 分钟被误判成播完而跳到下一集（表现为进度跳回 0）。
+  const nearEnd = lastKnownDuration > 0 && lastKnownPosition >= lastKnownDuration - 30;
+  const ended = (eofNow || idleNow) && playbackStarted && nearEnd;
   return {
     running: true,
     connected: true,
@@ -371,6 +378,7 @@ ipcMain.handle('mpv:state', () => {
     volume: Number(p('volume') || 0),
     muted: (() => { const v = p('mute'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
     eof: eofNow,
+    lastPosition: Math.round(lastKnownPosition),
     ended,
     idle: idleNow,
     idle: !!p('idle-active'),
