@@ -3237,19 +3237,24 @@
       updateMarkButtons();
     }
 
-    /* 长按 650ms = 清除该标记；短按 = 记录 */
+    /* 长按 650ms = 清除该标记；短按 = 记录。
+       注意：click 事件在 pointerup 之后才触发，用布尔标志容易漏，
+       这里改成「时间戳抑制」：长按触发后 1.2 秒内的 click 一律忽略。 */
     let markPressTimer = null;
-    let markLongFired = false;
+    let markSuppressClickUntil = 0;
     function markPress(which) {
-      markLongFired = false;
       clearTimeout(markPressTimer);
       markPressTimer = setTimeout(() => {
-        markLongFired = true;
+        markSuppressClickUntil = Date.now() + 1200;
         clearShowMark(which);
+        showToast('已清除标记（长按）', 1800);
       }, 650);
     }
-    function markRelease(which) {
+    function markRelease() {
       clearTimeout(markPressTimer);
+    }
+    function markClickBlocked() {
+      return Date.now() < markSuppressClickUntil;
     }
 
     async function clearShowMark(which) {
@@ -3277,7 +3282,7 @@
     }
 
     function markIntro() {
-      if (!currentDetail) return;
+      if (markClickBlocked()) return;   // 长按刚清除，忽略随后的点击
       const pos = currentAbsPos();
       const dur = seekDuration();
       if (!(pos > 3)) {
@@ -3294,7 +3299,7 @@
     }
 
     function markOutro() {
-      if (!currentDetail) return;
+      if (markClickBlocked()) return;   // 长按刚清除，忽略随后的点击
       const dur = seekDuration();
       if (!(dur > 0)) {
         showToast('还没拿到总时长，播一会儿再按', 3000);
