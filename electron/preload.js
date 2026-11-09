@@ -27,6 +27,22 @@ contextBridge.exposeInMainWorld('kimbox', {
     return () => ipcRenderer.removeListener('shell:fullscreen-changed', handler);
   },
 
+  // 摸鱼键 (Boss Key)
+  getBossKey: () => ipcRenderer.invoke('shell:getBossKey'),
+  setBossKey: (accelerator, enabled) => ipcRenderer.invoke('shell:setBossKey', { accelerator, enabled }),
+  setBossKeyEnabled: (enabled) => ipcRenderer.invoke('shell:setBossKeyEnabled', { enabled }),
+  triggerBossKey: () => ipcRenderer.invoke('shell:triggerBossKey'),
+  onBossKeyPause: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('boss-key:pause', handler);
+    return () => ipcRenderer.removeListener('boss-key:pause', handler);
+  },
+  onBossKeyWake: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('boss-key:wake', handler);
+    return () => ipcRenderer.removeListener('boss-key:wake', handler);
+  },
+
   // 字幕 / 音轨
   tracks: () => ipcRenderer.invoke('mpv:tracks'),
   setTrack: (kind, id) => ipcRenderer.invoke('mpv:setTrack', { kind, id }),

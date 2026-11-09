@@ -935,6 +935,23 @@
     .mpv-stage .mpv-title { font-size: 15px; color: #dfe7ee; font-weight: 600; }
     .mpv-stage .mpv-sub { font-size: 12px; color: #6b7c8a; }
     .mpv-stage button { margin-top: 8px; }
+
+    /* 网页模式下的摸鱼伪装遮罩 */
+    .boss-web-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: #0b0d10;
+      color: #64748b;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
+      cursor: pointer;
+    }
+    .boss-web-overlay.show { display: flex; }
   </style>
 </head>
 <body>
@@ -970,6 +987,7 @@
       <input type="text" id="searchInput" placeholder="搜索影片..." onkeyup="if(event.key==='Enter') doSearch()">
       <button class="secondary" onclick="doSearch()">搜索</button>
       <button class="secondary icon-btn" id="btnHomeRefresh" onclick="reloadHome()" title="刷新源内容（重新拉取当前列表）"></button>
+      <button class="ghost-btn" id="btnBossKey" onclick="openBossKeyModal()" title="摸鱼键 (默认 Alt+Q，点击设置)">🐟 摸鱼键</button>
     </div>
 
     <div class="header-spacer"></div>
@@ -1015,6 +1033,61 @@
       </div>
       <div class="cfg-sub">点「启用」切换到该配置源，点「删除」只删除这一条（不影响收藏与历史）。</div>
       <div id="cfgList"></div>
+    </div>
+  </div>
+
+  <!-- 摸鱼键设置面板 -->
+  <div class="cfg-mask" id="bossMask" onclick="if(event.target===this) closeBossKeyModal()">
+    <div class="cfg-panel" style="max-width: 520px;">
+      <div class="cfg-title">
+        <span>🐟 摸鱼键设置 (Boss Key)</span>
+        <span class="grow"></span>
+        <button class="ghost-btn" onclick="closeBossKeyModal()">关闭</button>
+      </div>
+      <div class="cfg-sub">
+        按下全局快捷键快速隐藏窗口并自动暂停音视频；再次按下唤醒窗口（保持暂停，需手动点击播放）。
+      </div>
+
+      <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+          <div>
+            <div style="font-weight: 600; font-size: 14px;">当前全局快捷键</div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">任意程序窗口下均有效</div>
+          </div>
+          <span id="bossKeyBadge" style="background: rgba(34, 211, 238, 0.15); border: 1px solid rgba(34, 211, 238, 0.4); color: #5eead4; font-family: monospace; font-size: 15px; font-weight: 700; padding: 4px 12px; border-radius: 6px;">Alt + Q</span>
+        </div>
+
+        <div style="margin-bottom: 14px;">
+          <label style="display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">自定义快捷键录制（点击输入框后按下键盘组合键）：</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="bossKeyInput" readonly placeholder="点击此处录制快捷键 (如 Alt+Q)..." 
+              style="flex: 1; text-align: center; font-family: monospace; font-size: 14px; font-weight: 600; cursor: pointer; background: #0b0d10; border: 1px solid var(--border); color: #fff; padding: 8px 12px; border-radius: 6px;"
+              onkeydown="handleBossKeyRecord(event)" onfocus="this.placeholder='请在键盘上按下组合键...'" onblur="if(!this.value) this.placeholder='点击此处录制快捷键 (如 Alt+Q)...'">
+            <button class="secondary" onclick="applyRecordedBossKey()" style="white-space: nowrap;">确认应用</button>
+          </div>
+          <div id="bossKeyHint" style="font-size: 12px; color: var(--text-muted); margin-top: 6px; min-height: 18px;"></div>
+        </div>
+
+        <div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">快速预设：</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            <button class="ghost-btn" style="padding: 4px 10px; font-size: 12px;" onclick="setPresetBossKey('Alt+Q')">Alt + Q (推荐默认)</button>
+            <button class="ghost-btn" style="padding: 4px 10px; font-size: 12px;" onclick="setPresetBossKey('Alt+W')">Alt + W</button>
+            <button class="ghost-btn" style="padding: 4px 10px; font-size: 12px;" onclick="setPresetBossKey('Ctrl+Q')">Ctrl + Q</button>
+            <button class="ghost-btn" style="padding: 4px 10px; font-size: 12px;" onclick="setPresetBossKey('Ctrl+Shift+H')">Ctrl + Shift + H</button>
+            <button class="ghost-btn" style="padding: 4px 10px; font-size: 12px;" onclick="setPresetBossKey('F9')">F9</button>
+            <button class="ghost-btn" style="padding: 4px 10px; font-size: 12px;" onclick="setPresetBossKey('F11')">F11</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06);">
+        <button class="secondary" onclick="testBossKey()" title="立即隐藏窗口，请使用快捷键唤醒">立即测试隐藏</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="ghost-btn" onclick="resetBossKeyDefault()">恢复默认 (Alt+Q)</button>
+          <button class="ghost-btn" onclick="closeBossKeyModal()">完成</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1224,6 +1297,7 @@
       await loadVersion();
       await refreshConfigList();
       await loadPlayers();
+      await initBossKey();
       await bootstrap();
     };
 
@@ -4209,6 +4283,294 @@
       }
     });
 
+    /* ==================== 摸鱼键 (Boss Key) ==================== */
+    let bossKeyCurrent = 'Alt+Q';
+    let isBrowserBossHidden = false;
+
+    function getStoredBossKey() {
+      try {
+        return localStorage.getItem('tvbox_bosskey') || 'Alt+Q';
+      } catch (e) {
+        return 'Alt+Q';
+      }
+    }
+
+    async function initBossKey() {
+      bossKeyCurrent = getStoredBossKey();
+      if (window.kimbox && window.kimbox.getBossKey) {
+        try {
+          const res = await window.kimbox.getBossKey();
+          if (res && res.shortcut) {
+            bossKeyCurrent = res.shortcut;
+            try { localStorage.setItem('tvbox_bosskey', bossKeyCurrent); } catch (e) {}
+          }
+        } catch (e) {}
+
+        if (window.kimbox.onBossKeyPause) {
+          window.kimbox.onBossKeyPause(() => {
+            handleBossKeyPause();
+          });
+        }
+        if (window.kimbox.onBossKeyWake) {
+          window.kimbox.onBossKeyWake(() => {
+            handleBossKeyWake();
+          });
+        }
+      }
+      updateBossKeyUI();
+    }
+
+    function updateBossKeyUI() {
+      const btn = document.getElementById('btnBossKey');
+      if (btn) {
+        btn.textContent = '🐟 摸鱼键';
+        btn.title = `摸鱼快捷键: ${bossKeyCurrent} (点击设置)`;
+      }
+      const badge = document.getElementById('bossKeyBadge');
+      if (badge) {
+        badge.textContent = bossKeyCurrent;
+      }
+    }
+
+    function handleBossKeyPause() {
+      if (isMpv()) {
+        try { mpvCmd('set', ['pause', 'yes']); } catch (e) {}
+      }
+      const v = document.getElementById('h5Player');
+      if (v) {
+        try { v.pause(); } catch (e) {}
+      }
+      const btnPlay = document.getElementById('btnPlay');
+      if (btnPlay) btnPlay.innerHTML = ICON.play;
+      try { saveHistory(true); } catch (e) {}
+      try { showBars(); } catch (e) {}
+    }
+
+    function handleBossKeyWake() {
+      // 唤醒后：保持暂停状态，绝不自动播放！
+      if (isMpv()) {
+        try { mpvCmd('set', ['pause', 'yes']); } catch (e) {}
+      }
+      const v = document.getElementById('h5Player');
+      if (v && !v.paused) {
+        try { v.pause(); } catch (e) {}
+      }
+      const btnPlay = document.getElementById('btnPlay');
+      if (btnPlay) btnPlay.innerHTML = ICON.play;
+      showToast('🐟 已唤醒（已暂停，请手动点击播放）', 3000);
+    }
+
+    function triggerBrowserBossKey() {
+      const overlay = document.getElementById('bossWebOverlay');
+      if (!overlay) return;
+
+      if (!isBrowserBossHidden) {
+        handleBossKeyPause();
+        overlay.classList.add('show');
+        document.title = '新标签页';
+        isBrowserBossHidden = true;
+      } else {
+        overlay.classList.remove('show');
+        document.title = 'KimBoxPC';
+        isBrowserBossHidden = false;
+        handleBossKeyWake();
+      }
+    }
+
+    function openBossKeyModal() {
+      const mask = document.getElementById('bossMask');
+      if (!mask) return;
+      mask.classList.add('show');
+      updateBossKeyUI();
+      const input = document.getElementById('bossKeyInput');
+      if (input) {
+        input.value = '';
+        input.placeholder = `当前: ${bossKeyCurrent}，点击此处按键修改...`;
+      }
+      const hint = document.getElementById('bossKeyHint');
+      if (hint) {
+        hint.textContent = '';
+      }
+      if (window.kimbox && window.kimbox.setBossKeyEnabled) {
+        window.kimbox.setBossKeyEnabled(false);
+      }
+    }
+
+    function closeBossKeyModal() {
+      const mask = document.getElementById('bossMask');
+      if (mask) mask.classList.remove('show');
+      if (window.kimbox && window.kimbox.setBossKeyEnabled) {
+        window.kimbox.setBossKeyEnabled(true);
+      }
+    }
+
+    function handleBossKeyRecord(e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const input = document.getElementById('bossKeyInput');
+      const hint = document.getElementById('bossKeyHint');
+
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) {
+        const parts = [];
+        if (e.ctrlKey) parts.push('Ctrl');
+        if (e.altKey) parts.push('Alt');
+        if (e.shiftKey) parts.push('Shift');
+        if (e.metaKey) parts.push('Meta');
+        input.value = parts.join('+') + '+...';
+        return;
+      }
+
+      const parts = [];
+      if (e.ctrlKey) parts.push('Ctrl');
+      if (e.altKey) parts.push('Alt');
+      if (e.shiftKey) parts.push('Shift');
+      if (e.metaKey) parts.push('Meta');
+
+      let key = e.key;
+      if (key.length === 1) {
+        key = key.toUpperCase();
+      } else if (/^Key([A-Z])$/i.test(e.code)) {
+        key = e.code.slice(3).toUpperCase();
+      } else if (/^Digit([0-9])$/i.test(e.code)) {
+        key = e.code.slice(5);
+      } else if (key === ' ') {
+        key = 'Space';
+      } else if (/^F[1-9][0-2]?$/i.test(key)) {
+        key = key.toUpperCase();
+      } else if (key === 'Escape') {
+        key = 'Esc';
+      }
+
+      const isFunctionKey = /^F[1-9][0-2]?$/i.test(key);
+      if (parts.length === 0 && !isFunctionKey) {
+        parts.push('Alt');
+        if (hint) {
+          hint.style.color = '#f59e0b';
+          hint.textContent = '单按普通字母易与日常输入冲突，已自动组合 Alt+' + key;
+        }
+      } else {
+        if (hint) {
+          hint.style.color = '#38bdf8';
+          hint.textContent = '已捕获按键组合，请点击「确认应用」生效';
+        }
+      }
+
+      parts.push(key);
+      input.value = parts.join('+');
+    }
+
+    async function applyRecordedBossKey() {
+      const input = document.getElementById('bossKeyInput');
+      const val = (input.value || '').replace(/\+\.\.\.$/, '').trim();
+      if (!val) {
+        const hint = document.getElementById('bossKeyHint');
+        if (hint) {
+          hint.style.color = '#f59e0b';
+          hint.textContent = '请先在输入框中按下键盘组合键';
+        }
+        return;
+      }
+      await saveAndRegisterBossKey(val);
+    }
+
+    async function setPresetBossKey(preset) {
+      const input = document.getElementById('bossKeyInput');
+      if (input) input.value = preset;
+      await saveAndRegisterBossKey(preset);
+    }
+
+    async function resetBossKeyDefault() {
+      await saveAndRegisterBossKey('Alt+Q');
+    }
+
+    async function saveAndRegisterBossKey(shortcut) {
+      const hint = document.getElementById('bossKeyHint');
+
+      try {
+        if (window.kimbox && window.kimbox.setBossKey) {
+          const res = await window.kimbox.setBossKey(shortcut, true);
+          if (!res.ok) {
+            if (hint) {
+              hint.style.color = '#ef4444';
+              hint.textContent = res.error || '快捷键已被占用或注册失败';
+            }
+            return false;
+          }
+          shortcut = res.shortcut || shortcut;
+        }
+
+        bossKeyCurrent = shortcut;
+        try { localStorage.setItem('tvbox_bosskey', shortcut); } catch (e) {}
+
+        updateBossKeyUI();
+        if (hint) {
+          hint.style.color = '#22c55e';
+          hint.textContent = `快捷键 ${shortcut} 已成功保存并生效！`;
+        }
+        return true;
+      } catch (err) {
+        if (hint) {
+          hint.style.color = '#ef4444';
+          hint.textContent = '设置失败: ' + err.message;
+        }
+        return false;
+      }
+    }
+
+    function testBossKey() {
+      closeBossKeyModal();
+      setTimeout(() => {
+        if (window.kimbox && window.kimbox.triggerBossKey) {
+          window.kimbox.triggerBossKey();
+        } else {
+          triggerBrowserBossKey();
+        }
+      }, 150);
+    }
+
+    function matchesBossKey(e) {
+      const shortcut = bossKeyCurrent || 'Alt+Q';
+      const parts = shortcut.split('+').map(p => p.trim());
+      const hasCtrl = parts.includes('Ctrl') || parts.includes('CommandOrControl') || parts.includes('CmdOrCtrl');
+      const hasAlt = parts.includes('Alt');
+      const hasShift = parts.includes('Shift');
+      const hasMeta = parts.includes('Meta') || parts.includes('Cmd') || parts.includes('Command');
+
+      if (!!e.ctrlKey !== hasCtrl) return false;
+      if (!!e.altKey !== hasAlt) return false;
+      if (!!e.shiftKey !== hasShift) return false;
+      if (!!e.metaKey !== hasMeta) return false;
+
+      const mainKey = parts[parts.length - 1].toUpperCase();
+      let pressedKey = e.key.toUpperCase();
+      if (/^Key([A-Z])$/i.test(e.code)) {
+        pressedKey = e.code.slice(3).toUpperCase();
+      } else if (/^Digit([0-9])$/i.test(e.code)) {
+        pressedKey = e.code.slice(5);
+      } else if (e.code === 'Space') {
+        pressedKey = 'SPACE';
+      } else if (e.code === 'Escape') {
+        pressedKey = 'ESC';
+      }
+      return pressedKey === mainKey;
+    }
+
+    window.addEventListener('keydown', (e) => {
+      const mask = document.getElementById('bossMask');
+      if (mask && mask.classList.contains('show')) return;
+
+      if (matchesBossKey(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (window.kimbox && window.kimbox.triggerBossKey) {
+          window.kimbox.triggerBossKey();
+        } else {
+          triggerBrowserBossKey();
+        }
+      }
+    }, true);
+
     function showStatus(text) {
       const msg = document.getElementById('statusMsg');
       const grid = document.getElementById('videoGrid');
@@ -4230,6 +4592,12 @@
         <button class="primary-btn" id="askOkBtn" onclick="askOk()">确定</button>
       </div>
     </div>
+  </div>
+
+  <!-- 浏览器模式摸鱼伪装遮罩 -->
+  <div class="boss-web-overlay" id="bossWebOverlay" onclick="triggerBrowserBossKey()">
+    <div style="font-size: 15px; opacity: 0.65; margin-bottom: 8px;">🐟 已快速隐藏播放（已暂停）</div>
+    <div style="font-size: 12px; opacity: 0.4;">按快捷键或点击任意处唤醒并手动播放</div>
   </div>
 
 </body>

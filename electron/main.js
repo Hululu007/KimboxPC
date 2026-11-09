@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -217,6 +217,7 @@ function createMainWindow() {
     if (!mainWin.isDestroyed()) mainWin.webContents.send('shell:fullscreen-changed', { fullscreen: false });
   });
 
+  mainWin.on('show', () => { isBossHidden = false; });
   mainWin.on('close', () => saveWindowState(mainWin));
 
   mainWin.on('closed', () => {
@@ -235,6 +236,182 @@ ipcMain.handle('shell:fullscreen', (evt, { on }) => {
 
 ipcMain.handle('shell:isfullscreen', () => {
   return { fullscreen: !!(mainWin && !mainWin.isDestroyed() && mainWin.isFullScreen()) };
+});
+
+/* ---------- 摸鱼键 (Boss Key) 全局快速隐藏与唤醒 ---------- */
+const BOSS_KEY_FILE = path.join(ROOT, 'data', 'boss-key.json');
+let currentBossShortcut = 'Alt+Q';
+let bossKeyEnabled = true;
+let isBossHidden = false;
+let wasFullscreenBeforeHide = false;
+
+function loadBossKeyConfig() {
+  try {
+    if (fs.existsSync(BOSS_KEY_FILE)) {
+      const s = JSON.parse(fs.readFileSync(BOSS_KEY_FILE, 'utf8'));
+      if (s && typeof s.shortcut === 'string' && s.shortcut.trim()) {
+        return {
+          shortcut: s.shortcut.trim(),
+          enabled: s.enabled !== false
+        };
+      }
+    }
+  } catch (e) {}
+  return { shortcut: 'Alt+Q', enabled: true };
+}
+
+function saveBossKeyConfig(cfg) {
+  try {
+    fs.mkdirSync(path.dirname(BOSS_KEY_FILE), { recursive: true });
+    fs.writeFileSync(BOSS_KEY_FILE, JSON.stringify(cfg, null, 2), 'utf8');
+  } catch (e) {}
+}
+
+function pausePlaybackForBossKey() {
+  try {
+    if (native && inst) {
+      native.setProp(inst, 'pause', true);
+    }
+  } catch (e) {}
+  try {
+    if (mainWin && !mainWin.isDestroyed() && mainWin.webContents) {
+      mainWin.webContents.send('boss-key:pause');
+    }
+  } catch (e) {}
+}
+
+function triggerBossKey() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+
+  const isVisible = mainWin.isVisible() && !mainWin.isMinimized() && !isBossHidden;
+
+  if (isVisible) {
+    // 隐藏：暂停视频与音频，记录全屏状态
+    pausePlaybackForBossKey();
+    wasFullscreenBeforeHide = mainWin.isFullScreen();
+    isBossHidden = true;
+    mainWin.hide();
+    console.log('[boss-key] 窗口已快速隐藏并暂停播放');
+  } else {
+    // 唤醒：还原窗口并置前，保持暂停状态
+    isBossHidden = false;
+    if (mainWin.isMinimized()) {
+      mainWin.restore();
+    }
+    mainWin.setAlwaysOnTop(true);
+    mainWin.show();
+    mainWin.focus();
+    mainWin.setAlwaysOnTop(false);
+
+    if (wasFullscreenBeforeHide && !mainWin.isFullScreen()) {
+      try { mainWin.setFullScreen(true); } catch (e) {}
+    }
+
+    // 唤醒后：保持暂停，绝不自动播放！
+    try {
+      if (mainWin.webContents) {
+        mainWin.webContents.send('boss-key:wake');
+      }
+    } catch (e) {}
+    console.log('[boss-key] 窗口已唤醒，保持暂停状态等待手动播放');
+  }
+}
+
+function registerBossKey(accelerator) {
+  if (!accelerator || typeof accelerator !== 'string') return false;
+  if (currentBossShortcut) {
+    try { globalShortcut.unregister(currentBossShortcut); } catch (e) {}
+  }
+  if (!bossKeyEnabled) return true;
+
+  try {
+    const ok = globalShortcut.register(accelerator, () => {
+      triggerBossKey();
+    });
+    if (ok) {
+      currentBossShortcut = accelerator;
+      console.log(`[boss-key] 全局快捷键注册成功: ${accelerator}`);
+      return true;
+    }
+    console.warn(`[boss-key] 全局快捷键注册失败: ${accelerator}`);
+    return false;
+  } catch (err) {
+    console.warn(`[boss-key] 快捷键注册异常:`, err.message);
+    return false;
+  }
+}
+
+ipcMain.handle('shell:getBossKey', () => {
+  return {
+    shortcut: currentBossShortcut || 'Alt+Q',
+    enabled: bossKeyEnabled,
+    registered: globalShortcut.isRegistered(currentBossShortcut || 'Alt+Q')
+  };
+});
+
+ipcMain.handle('shell:setBossKey', (evt, { accelerator, enabled }) => {
+  const newEnabled = enabled !== undefined ? !!enabled : bossKeyEnabled;
+  const newKey = (accelerator && String(accelerator).trim()) || currentBossShortcut || 'Alt+Q';
+
+  if (currentBossShortcut) {
+    try { globalShortcut.unregister(currentBossShortcut); } catch (e) {}
+  }
+
+  bossKeyEnabled = newEnabled;
+  if (!bossKeyEnabled) {
+    currentBossShortcut = newKey;
+    saveBossKeyConfig({ shortcut: currentBossShortcut, enabled: false });
+    return { ok: true, shortcut: currentBossShortcut, enabled: false };
+  }
+
+  try {
+    const registered = globalShortcut.register(newKey, () => {
+      triggerBossKey();
+    });
+    if (registered) {
+      currentBossShortcut = newKey;
+      saveBossKeyConfig({ shortcut: currentBossShortcut, enabled: true });
+      return { ok: true, shortcut: currentBossShortcut, enabled: true };
+    } else {
+      let rollbackOk = false;
+      if (currentBossShortcut && currentBossShortcut !== newKey) {
+        try {
+          rollbackOk = globalShortcut.register(currentBossShortcut, () => triggerBossKey());
+        } catch (e) {}
+      }
+      return {
+        ok: false,
+        error: `快捷键 "${newKey}" 注册失败（已被系统或其他软件占用），请更换`,
+        shortcut: rollbackOk ? currentBossShortcut : newKey,
+        enabled: bossKeyEnabled
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: `快捷键格式不支持或无效: ${err.message}`,
+      shortcut: currentBossShortcut,
+      enabled: bossKeyEnabled
+    };
+  }
+});
+
+ipcMain.handle('shell:setBossKeyEnabled', (evt, { enabled }) => {
+  bossKeyEnabled = !!enabled;
+  if (bossKeyEnabled) {
+    registerBossKey(currentBossShortcut);
+  } else {
+    if (currentBossShortcut) {
+      try { globalShortcut.unregister(currentBossShortcut); } catch (e) {}
+    }
+  }
+  saveBossKeyConfig({ shortcut: currentBossShortcut, enabled: bossKeyEnabled });
+  return { ok: true, enabled: bossKeyEnabled, shortcut: currentBossShortcut };
+});
+
+ipcMain.handle('shell:triggerBossKey', () => {
+  triggerBossKey();
+  return { ok: true };
 });
 
 /* ---------- 字幕 / 音轨 ---------- */
@@ -540,14 +717,26 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     await startServer();
     setTimeout(createMainWindow, 300);
+
+    // 加载并注册摸鱼键
+    const cfg = loadBossKeyConfig();
+    currentBossShortcut = cfg.shortcut;
+    bossKeyEnabled = cfg.enabled;
+    registerBossKey(currentBossShortcut);
   });
 }
 
 app.on('window-all-closed', () => {
   stopPlayback();
+  try { globalShortcut.unregisterAll(); } catch (e) {}
   app.quit();
+});
+
+app.on('will-quit', () => {
+  try { globalShortcut.unregisterAll(); } catch (e) {}
 });
 
 app.on('before-quit', () => {
   stopPlayback();
+  try { globalShortcut.unregisterAll(); } catch (e) {}
 });
