@@ -42,6 +42,11 @@ let renderH = 720;
 let lastFrameAt = 0;
 let lastKnownDuration = 0;
 let lastKnownPosition = 0;   // 见过的最远播放位置（中途 EOF 时 time-pos 会归零）
+// mpv 的原始 time-pos 在「自然播放跨过 HLS discontinuity」时会重置到 0 附近，
+// 而 seek 之后又报告绝对值。为让界面进度与广告区间对得上，这里维护一个偏移量。
+let timeOffset = 0;
+let lastRawPos = 0;
+let selfSeekUntil = 0;
 let playbackStarted = false;
 
 /* ---------- 内嵌服务端 ---------- */
@@ -396,6 +401,9 @@ ipcMain.handle('mpv:cmd', (evt, { name, args }) => {
   try {
     if (!inst || !native) return { error: 'mpv 未启动' };
     if (name === 'seek') {
+      // seek 之后 mpv 报告的是绝对时间，偏移量清零，并给 5 秒豁免期避免误判为"时间轴重置"
+      timeOffset = 0;
+      selfSeekUntil = Date.now() + 5000;
       native.command(inst, ['seek', String(args[0]), args[1] || 'absolute']);
     } else if (name === 'cycle') {
       native.command(inst, ['cycle', String(args[0])]);
@@ -416,7 +424,16 @@ ipcMain.handle('mpv:state', () => {
 
   const dur = Number(p('duration') || 0);
   if (dur > 0) lastKnownDuration = dur;
-  const posNow = Number(p('time-pos') || 0);
+
+  const rawPos = Number(p('time-pos') || 0);
+  // 检测「时间轴重置」：位置突然大幅后退，且不是我们自己 seek 造成的
+  if (rawPos < lastRawPos - 15 && Date.now() > selfSeekUntil) {
+    // 把之前累计的绝对值接上：offset = 上一刻的绝对位置 - 新报告的原始位置
+    timeOffset = (lastRawPos + timeOffset) - rawPos;
+    console.log('[mpv] 检测到时间轴重置，偏移量设置为', Math.round(timeOffset));
+  }
+  lastRawPos = rawPos;
+  const posNow = rawPos + timeOffset;   // 换算成绝对时间
   if (posNow > lastKnownPosition) lastKnownPosition = posNow;
   const idleNow = p('idle-active') === 'yes' || p('idle-active') === true || p('idle-active') === 1;
   const eofNow = (() => { const v = p('eof-reached'); return v === 'yes' || v === 'true' || v === 1 || v === true; })();
@@ -428,7 +445,8 @@ ipcMain.handle('mpv:state', () => {
   return {
     running: true,
     connected: true,
-    position: Number(p('time-pos') || 0),
+    position: posNow,
+    rawPosition: rawPos,
     duration: Number(p('duration') || 0),
     paused: (() => { const v = p('pause'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
     volume: Number(p('volume') || 0),

@@ -2465,6 +2465,7 @@
           mpvState.speed = s.speed || 1;
           mpvState.cacheSecs = s.cacheSecs || 0;
           mpvState.cacheDuration = s.cacheDuration || 0;
+          mpvState.rawPosition = s.rawPosition || 0;
           if (typeof s.volume === 'number') { mpvState.volume = s.volume; updateVolumeUI(); }
           if ((s.position || 0) > 5) sawProgress = true;
           mpvState.ended = !!s.ended;
