@@ -1111,7 +1111,7 @@
         <option value="fill">填充</option>
         <option value="crop">裁剪</option>
       </select>
-      <button class="ctrl-btn" id="btnReload" onclick="reloadCurrentEpisode()" title="重载当前集（音频异常时点这里）"></button>
+      <button class="ctrl-btn" id="btnReload" onclick="reloadCurrentEpisode()" title="重新加载当前集（从当前位置继续）"></button>
       <button class="ctrl-btn" id="btnOsd" onclick="toggleOsd()" title="信息层 (i)">ⓘ</button>
       <button class="ctrl-btn" id="btnFull" onclick="toggleFullscreen()" title="全屏 (F)"></button>
     </div>
@@ -3735,14 +3735,29 @@
       setTimeout(finish, 2500);
     }
 
-    // 重载当前集（音频异常时的逃生口）
+    // 重新加载当前集：从**当前播放位置**继续，不回到 0
     function reloadCurrentEpisode(silent = false) {
       if (!currentDetail) return;
       const source = currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
       const ep = source && source.episodes && source.episodes[currentEpIdx];
       if (!ep) return;
-      const at = isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0;
-      if (!silent) showToast('正在重载当前集…', 2500);
+
+      // 三种引擎的位置来源不同：mpv 用状态、兼容模式用 base+currentTime、直连用 currentTime
+      let at = 0;
+      try {
+        if (isMpv()) {
+          at = mpvState.position || 0;
+        } else if (compat.on) {
+          at = compatPosition() || 0;
+        } else if (isFinite(pvVideo.currentTime)) {
+          at = pvVideo.currentTime;
+        }
+      } catch (e) {}
+      if (!(at > 0)) at = 0;
+
+      if (!silent) {
+        showToast(at > 1 ? `正在从 ${fmtTime(at)} 重新加载…` : '正在重新加载当前集…', 2500);
+      }
       playEpisode(ep.url, at);
     }
 
