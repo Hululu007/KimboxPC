@@ -2079,13 +2079,13 @@
 
       card.innerHTML = `
         <div class="poster-wrap">
-          <img src="${v.vod_pic || fallback}" referrerpolicy="no-referrer" loading="lazy" onerror="this.onerror=null;this.src='${fallback}'">
-          ${v.vod_remarks ? `<div class="remarks">${v.vod_remarks}</div>` : ''}
+          <img src="${escapeHtml(v.vod_pic || fallback)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.onerror=null;this.src='${fallback}'">
+          ${v.vod_remarks ? `<div class="remarks">${escapeHtml(v.vod_remarks)}</div>` : ''}
           ${progress}
         </div>
         <div class="card-info">
-          <div class="card-title">${v.vod_name}</div>
-          ${v.siteName ? `<div class="card-site">${v.siteName}${v.sources > 1 ? ` <span class="src-count">· ${v.sources} 个源</span>` : ''}</div>` : ''}
+          <div class="card-title">${escapeHtml(v.vod_name || '未知影片')}</div>
+          ${v.siteName ? `<div class="card-site">${escapeHtml(v.siteName)}${v.sources > 1 ? ` <span class="src-count">· ${v.sources} 个源</span>` : ''}</div>` : ''}
         </div>
       `;
 
@@ -2852,8 +2852,8 @@
         const key = siteKey || activeSiteKey;
         const resp = await fetch(`/api/detail?id=${encodeURIComponent(id)}&siteKey=${encodeURIComponent(key)}`);
         const detail = await resp.json();
-        if (!detail) {
-          showToast('获取详情失败，该片可能已下架', 3000);
+        if (!detail || detail.error) {
+          showToast('获取详情失败: ' + (detail && detail.error ? detail.error : '该片可能已下架'), 3000);
           document.getElementById('mTitle').textContent = '获取失败';
           return;
         }
@@ -2937,7 +2937,7 @@
           epIndex: currentEpIdx,
           epUrl: ep.url,
           position: isMpv() ? (mpvState.position || 0) : (compat.on ? compatPosition() : (isFinite(v.currentTime) ? v.currentTime : 0)),
-          duration: isFinite(v.duration) ? v.duration : 0
+          duration: seekDuration()
         })
       }).catch(() => {});
     }
@@ -2990,15 +2990,16 @@
       const h = currentDetail.history;
       let startIdx = 0;
       let resumeAt = 0;
-      if (h && !isManualSwitch && (!h.source || h.source === source.sourceName)) {
-        startIdx = Math.min(Math.max(0, Number(h.ep_index) || 0), source.episodes.length - 1);
-        resumeAt = Number(h.position) || 0;
-      }
-      // 从「同片源」切换过来：尽量停留在同一集
       if (pendingEpIdx !== null && pendingEpIdx !== undefined) {
         startIdx = Math.min(Math.max(0, pendingEpIdx), source.episodes.length - 1);
         resumeAt = 0;
         pendingEpIdx = null;
+      } else if (isManualSwitch) {
+        startIdx = Math.min(Math.max(0, currentEpIdx || 0), source.episodes.length - 1);
+        resumeAt = 0;
+      } else if (h && (!h.source || h.source === source.sourceName)) {
+        startIdx = Math.min(Math.max(0, Number(h.ep_index) || 0), source.episodes.length - 1);
+        resumeAt = Number(h.position) || 0;
       }
 
       currentEpIdx = startIdx;
@@ -3007,6 +3008,7 @@
         btn.className = `ep-btn ${idx === startIdx ? 'active' : ''}`;
         btn.textContent = ep.title;
         btn.onclick = () => {
+          saveHistory(true);
           document.querySelectorAll('.ep-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           currentEpIdx = idx;
@@ -3058,7 +3060,7 @@
       const p = currentAbsPos();
       // 片尾标记：到达「总时长 - 片尾」即视为本集结束
       if (d > 0 && showMark.outro > 1 && p >= d - showMark.outro) return true;
-      if (isMpv()) return sawProgress && !!(mpvState.eof || mpvState.ended);
+      if (isMpv()) return sawProgress && !!(mpvState.ended || (d > 0 && p >= d - 1.5));
       if (!(d > 0)) return false;
       return p >= d - 1.5;
     }
@@ -3072,6 +3074,7 @@
       const source = currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
       if (!source || !source.episodes || !source.episodes.length) return;
 
+      saveHistory(true);
       eofHandled = true;
       autoNextGuardUntil = Date.now() + 8000;   // 8 秒内不再重复触发
       const next = currentEpIdx + 1;
@@ -3440,7 +3443,6 @@
             currentEpIdx = epIdx;
             document.querySelectorAll('.source-tab').forEach((el, i) => el.classList.toggle('active', i === alt.idx));
             renderEpisodes(false);
-            playEpisode(src.episodes[epIdx].url, 0);
             return;
           }
           showToast('这个源无法直接播放：' + e.message + '，建议换一个源', 6000);
@@ -3817,6 +3819,7 @@
     function playEpisodeByIndex(idx) {
       const source = currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
       if (!source || !source.episodes || !source.episodes[idx]) return false;
+      saveHistory(true);
       currentEpIdx = idx;
       eofHandled = false;
       document.querySelectorAll('#mEpisodes .ep-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
@@ -4019,6 +4022,7 @@
 
     function updateControls() {
       maybeAutoNext();
+      saveHistory(false);
       if (osdEnabled()) renderOsd();
       // 播到广告区间就跳过去（区间由 /api/ads 预先给出，列表本身没被改动）
       // 已判定"到片尾"时不再跳广告，避免两个机制互相打架
@@ -4111,12 +4115,16 @@
       showBars();
     }
 
-    // 点画面暂停/播放，双击全屏
+    // 点画面暂停/播放，双击全屏（兼容 h5Player 与 mpvCanvas）
     document.getElementById('pvStage').addEventListener('click', (e) => {
-      if (e.target.id !== 'h5Player') return;
+      if (e.target.id !== 'h5Player' && e.target.id !== 'mpvCanvas') return;
       togglePlay();
     });
-    pvVideo.addEventListener('dblclick', () => toggleFullscreen());
+    document.getElementById('pvStage').addEventListener('dblclick', (e) => {
+      if (e.target.id !== 'h5Player' && e.target.id !== 'mpvCanvas') return;
+      toggleFullscreen();
+    });
+    window.addEventListener('beforeunload', () => saveHistory(true));
 
     function toggleFullscreen() {
       if (isMpv() && isNativeShell()) { toggleNativeFullscreen(); return; }

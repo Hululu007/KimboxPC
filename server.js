@@ -191,7 +191,9 @@ app.post('/api/config/load', async (req, res) => {
   if (!url) return res.status(400).json({ error: '请提供配置源 URL' });
   try {
     const parsed = await ConfigParser.load(url);
-    const row = ConfigRepo.add(url, new URL(url).hostname);   // 同上，不再写死数量
+    let name = '';
+    try { name = new URL(url).hostname; } catch (e) { name = url.slice(0, 30); }
+    const row = ConfigRepo.add(url, name);   // 同上，不再写死数量
     await applyConfig(row);
     res.json({
       success: true,
@@ -319,6 +321,7 @@ app.get('/api/category', async (req, res) => {
 });
 
 app.get('/api/detail', async (req, res) => {
+  if (!req.query.id) return res.status(400).json({ error: '缺少 id 参数' });
   if (!requireSite(res)) return;
   try {
     // 必须先切到影片所属站点，再查详情；否则会用 id 去错误的站点查
@@ -766,9 +769,12 @@ async function fetchPlaylistMaybeMaster(url) {
       if (variant) break;
     }
     if (variant) {
-      const abs = new URL(variant, url).href;
-      const r2 = await axios.get(abs, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
-      return { text: String(r2.data || ''), finalUrl: abs };
+      let abs = '';
+      try { abs = new URL(variant, url).href; } catch (e) {}
+      if (abs) {
+        const r2 = await axios.get(abs, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
+        return { text: String(r2.data || ''), finalUrl: abs };
+      }
     }
   }
   return { text, finalUrl: url };

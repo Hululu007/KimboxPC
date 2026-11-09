@@ -29,7 +29,7 @@ echo [启动] KimBoxPC 桌面版...
 start "" "%EXE%" "%APP%"
 
 rem 等几秒确认真的起来了，避免静默失败一闪而过
-timeout /t 3 >nul
+ping 127.0.0.1 -n 4 >nul
 tasklist /FI "IMAGENAME eq electron.exe" | find /I "electron.exe" >nul
 if errorlevel 1 goto launchfail
 exit /b 0

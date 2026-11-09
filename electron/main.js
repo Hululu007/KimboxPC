@@ -147,7 +147,7 @@ function loadWindowState() {
 
 function saveWindowState(win) {
   try {
-    if (!win || win.isDestroyed()) return;
+    if (!win || win.isDestroyed() || win.isFullScreen()) return;
     const b = win.getNormalBounds ? win.getNormalBounds() : win.getBounds();
     const data = {
       x: b.x, y: b.y,
@@ -330,7 +330,7 @@ function startRenderLoop() {
     // 复制到独立 ArrayBuffer 再发送（避免外部缓冲被复用）
     const w = f.width, h = f.height;
     mainWin.webContents.send('mpv:frame', {
-      data: f.buffer,
+      data: Buffer.from(f.buffer),
       width: w,
       height: h
     });
@@ -459,7 +459,6 @@ ipcMain.handle('mpv:state', () => {
     lastPosition: Math.round(lastKnownPosition),
     ended,
     idle: idleNow,
-    idle: !!p('idle-active'),
     fps: frameCount,
     title: p('media-title') || '',
     // 画面信息（供右上角信息层显示）

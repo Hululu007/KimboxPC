@@ -28,11 +28,17 @@ class CmsEngine {
       this.request(url, { ac: 'videolist' })
     ]);
 
-    const rawClasses = (listData && listData.class) || (videoData && videoData.class) || [];
+    const rawClasses = Array.isArray(listData && listData.class)
+      ? listData.class
+      : (Array.isArray(videoData && videoData.class) ? videoData.class : []);
 
     // 站点接口返回的分类 name -> type_id 映射
     const classMap = new Map();
-    rawClasses.forEach(c => classMap.set(String(c.type_name).trim(), String(c.type_id)));
+    rawClasses.forEach(c => {
+      if (c && c.type_name !== undefined && c.type_id !== undefined) {
+        classMap.set(String(c.type_name).trim(), String(c.type_id));
+      }
+    });
 
     // 严格按配置文件里的 categories 白名单顺序输出（FongMi 同款行为）
     let classes = [];
@@ -51,15 +57,18 @@ class CmsEngine {
     // 未配置白名单，或一个都没匹配上时，退回接口原始分类顺序
     if (classes.length === 0) {
       rawClasses.forEach(c => {
+        if (!c || c.type_id === undefined) return;
         const id = String(c.type_id);
         if (!seen.has(id)) {
           seen.add(id);
-          classes.push({ type_id: id, type_name: c.type_name });
+          classes.push({ type_id: id, type_name: c.type_name || '' });
         }
       });
     }
 
-    const rawVideos = (videoData && videoData.list) || (listData && listData.list) || [];
+    const rawVideos = Array.isArray(videoData && videoData.list)
+      ? videoData.list
+      : (Array.isArray(listData && listData.list) ? listData.list : []);
     const list = rawVideos.map(this.formatVideoItem);
     const meta = videoData || listData || {};
 
@@ -77,11 +86,11 @@ class CmsEngine {
     const url = site.api;
     // 优先尝试 videolist 获取完整海报与字段
     let data = await this.request(url, { ac: 'videolist', t: typeId, pg: page });
-    if (!data || !data.list || data.list.length === 0) {
+    if (!data || !Array.isArray(data.list) || data.list.length === 0) {
       data = await this.request(url, { ac: 'list', t: typeId, pg: page });
     }
     
-    if (!data || !data.list) return { page: Number(page), pagecount: 1, total: 0, list: [] };
+    if (!data || !Array.isArray(data.list)) return { page: Number(page), pagecount: 1, total: 0, list: [] };
 
     return {
       page: Number(data.page || page),
@@ -95,10 +104,10 @@ class CmsEngine {
   static async search(site, keyword, page = 1) {
     const url = site.api;
     let data = await this.request(url, { ac: 'videolist', wd: keyword, pg: page });
-    if (!data || !data.list || data.list.length === 0) {
+    if (!data || !Array.isArray(data.list) || data.list.length === 0) {
       data = await this.request(url, { ac: 'list', wd: keyword, pg: page });
     }
-    if (!data || !data.list) return { list: [] };
+    if (!data || !Array.isArray(data.list)) return { list: [] };
     return {
       list: data.list.map(this.formatVideoItem)
     };
@@ -108,9 +117,10 @@ class CmsEngine {
   static async getDetail(site, id) {
     const url = site.api;
     const data = await this.request(url, { ac: 'videolist', ids: id }) || await this.request(url, { ac: 'detail', ids: id });
-    if (!data || !data.list || data.list.length === 0) return null;
+    if (!data || !Array.isArray(data.list) || data.list.length === 0) return null;
 
     const raw = data.list[0];
+    if (!raw) return null;
     const item = this.formatVideoItem(raw);
 
     const playFlags = (raw.vod_play_from || '默认').split('$$$');
@@ -119,10 +129,23 @@ class CmsEngine {
     const episodesGroup = [];
     playFlags.forEach((flag, index) => {
       const urlStr = playUrls[index] || '';
-      const episodes = urlStr.split('#').filter(Boolean).map(part => {
-        const [title, link] = part.split('$');
+      const episodes = urlStr.split('#').filter(Boolean).map((part, epIdx) => {
+        const trimmed = part.trim();
+        const dollarIdx = trimmed.indexOf('$');
+        let title = '';
+        let link = '';
+        if (dollarIdx >= 0) {
+          title = trimmed.slice(0, dollarIdx).trim();
+          link = trimmed.slice(dollarIdx + 1).trim();
+        } else if (/^https?:\/\//i.test(trimmed)) {
+          title = `第 ${epIdx + 1} 集`;
+          link = trimmed;
+        } else {
+          title = trimmed;
+          link = trimmed;
+        }
         return {
-          title: link ? title : `第 ${part} 集`,
+          title: title || `第 ${epIdx + 1} 集`,
           url: link || title
         };
       });
@@ -146,8 +169,9 @@ class CmsEngine {
   }
 
   static formatVideoItem(v) {
+    if (!v || typeof v !== 'object') return { vod_id: '', vod_name: '未知影片', vod_pic: '', vod_remarks: '', type_name: '' };
     return {
-      vod_id: String(v.vod_id),
+      vod_id: String(v.vod_id !== undefined ? v.vod_id : ''),
       vod_name: v.vod_name || '未知影片',
       vod_pic: v.vod_pic || '',
       vod_remarks: v.vod_remarks || '',
