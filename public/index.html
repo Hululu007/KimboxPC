@@ -1096,6 +1096,14 @@
           <div class="ctrl-seek-thumb" id="volThumb"></div>
         </div>
       </div>
+      <button class="ctrl-btn" id="btnMarkIntro" onclick="markIntro()" oncontextmenu="event.preventDefault();clearShowMark('intro')"
+              onpointerdown="markPress('intro')" onpointerup="markRelease('intro')" onpointerleave="markRelease('intro')"
+              style="font-size:12px;padding:4px 8px"
+              title="按一下：记录当前位置为片头；长按或右键：清除片头">片头</button>
+      <button class="ctrl-btn" id="btnMarkOutro" onclick="markOutro()" oncontextmenu="event.preventDefault();clearShowMark('outro')"
+              onpointerdown="markPress('outro')" onpointerup="markRelease('outro')" onpointerleave="markRelease('outro')"
+              style="font-size:12px;padding:4px 8px"
+              title="按一下：记录当前位置为片尾；长按或右键：清除片尾">片尾</button>
       <select class="ctrl-rate" id="rateSel" onchange="setRate(this.value)" title="倍速">
         <option value="0.5">0.5x</option>
         <option value="0.75">0.75x</option>
@@ -1131,6 +1139,10 @@
           <label class="audio-auto">
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
             拦截插播广告（默认开启；按区间自动跳过）
+          </label>
+          <label class="audio-auto">
+            本片标记
+            <span id="markSummary" style="color:#8c9ba5;font-size:12px"></span>
           </label>
           <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢">
             缓冲
@@ -2827,6 +2839,8 @@
           return;
         }
         currentDetail = detail;
+        // 片头/片尾标记按片名读取（必须等 currentDetail 赋值后再取）
+        await loadShowMark();
         if (detail.siteKey) {
           activeSiteKey = detail.siteKey;
           const sel = document.getElementById('siteSelect');
@@ -3019,10 +3033,12 @@
 
     /** 当前是否已播到结尾 */
     function isPlaybackEnded() {
-      if (isMpv()) return sawProgress && !!(mpvState.eof || mpvState.ended);
       const d = seekDuration();
+      const p = currentAbsPos();
+      // 片尾标记：到达「总时长 - 片尾」即视为本集结束
+      if (d > 0 && showMark.outro > 1 && p >= d - showMark.outro) return true;
+      if (isMpv()) return sawProgress && !!(mpvState.eof || mpvState.ended);
       if (!(d > 0)) return false;
-      const p = compat.on ? compatPosition() : (isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0);
       return p >= d - 1.5;
     }
 
@@ -3038,7 +3054,7 @@
       eofHandled = true;
       const next = currentEpIdx + 1;
       if (next >= source.episodes.length) {
-        showToast('已播放完最后一集', 3500);
+        showToast('已经是最后一集', 3500);
         return;
       }
       const ep = source.episodes[next];
@@ -3169,6 +3185,132 @@
       ].filter(Boolean).join('  ');
     }
 
+    /* ---------- 片头 / 片尾标记（按片名，做一次全片通用） ---------- */
+    let showMark = { intro: 0, outro: 0 };
+
+    /** 当前绝对播放位置（三种引擎统一） */
+    function currentAbsPos() {
+      try {
+        if (isMpv()) return mpvState.position || 0;
+        if (compat.on) return compatPosition() || 0;
+        return isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0;
+      } catch (e) { return 0; }
+    }
+
+    function updateMarkButtons() {
+      const a = document.getElementById('btnMarkIntro');
+      const b = document.getElementById('btnMarkOutro');
+      if (a) a.textContent = showMark.intro > 0 ? `片头 ${Math.round(showMark.intro)}s` : '片头';
+      if (b) b.textContent = showMark.outro > 0 ? `片尾 ${Math.round(showMark.outro)}s` : '片尾';
+      const s = document.getElementById('markSummary');
+      if (s) {
+        s.textContent = (showMark.intro > 0 || showMark.outro > 0)
+          ? `片头 ${Math.round(showMark.intro)}s · 片尾 ${Math.round(showMark.outro)}s（长按按钮即清除）`
+          : '未设置（播到片头结束按「片头」，快到结尾按「片尾」）';
+      }
+    }
+
+    async function loadShowMark() {
+      showMark = { intro: 0, outro: 0 };
+      const name = currentDetail && currentDetail.vod_name;
+      if (name) {
+        try {
+          const r = await (await fetch(`/api/marks?name=${encodeURIComponent(name)}`)).json();
+          if (r && r.mark) {
+            showMark = { intro: r.mark.intro || 0, outro: r.mark.outro || 0 };
+          }
+        } catch (e) {}
+      }
+      updateMarkButtons();
+    }
+
+    async function saveShowMark() {
+      const name = currentDetail && currentDetail.vod_name;
+      if (!name) return;
+      try {
+        await fetch('/api/marks', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, intro: showMark.intro, outro: showMark.outro })
+        });
+      } catch (e) {}
+      updateMarkButtons();
+    }
+
+    /* 长按 650ms = 清除该标记；短按 = 记录 */
+    let markPressTimer = null;
+    let markLongFired = false;
+    function markPress(which) {
+      markLongFired = false;
+      clearTimeout(markPressTimer);
+      markPressTimer = setTimeout(() => {
+        markLongFired = true;
+        clearShowMark(which);
+      }, 650);
+    }
+    function markRelease(which) {
+      clearTimeout(markPressTimer);
+    }
+
+    async function clearShowMark(which) {
+      const name = currentDetail && currentDetail.vod_name;
+      if (!name) return;
+      if (which === 'intro') showMark.intro = 0;
+      else if (which === 'outro') showMark.outro = 0;
+      else showMark = { intro: 0, outro: 0 };
+
+      // 两个都为 0 时直接从库里删掉
+      try {
+        if (showMark.intro === 0 && showMark.outro === 0) {
+          await fetch(`/api/marks?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        } else {
+          await fetch('/api/marks', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, intro: showMark.intro, outro: showMark.outro })
+          });
+        }
+      } catch (e) {}
+      updateMarkButtons();
+      const label = which === 'intro' ? '片头' : which === 'outro' ? '片尾' : '本片';
+      showToast(`已清除${label}标记`, 2200);
+    }
+
+    function markIntro() {
+      if (!currentDetail) return;
+      const pos = currentAbsPos();
+      const dur = seekDuration();
+      if (!(pos > 3)) {
+        showToast('位置太靠前，先播到片头结束再按', 3000);
+        return;
+      }
+      if (dur > 0 && dur - pos < 60) {
+        showToast('位置太靠后，不像片头', 3000);
+        return;
+      }
+      showMark.intro = Math.round(pos * 10) / 10;
+      saveShowMark();
+      showToast(`已记住片头 ${Math.round(pos)} 秒，本片所有集数自动跳过`, 3200);
+    }
+
+    function markOutro() {
+      if (!currentDetail) return;
+      const dur = seekDuration();
+      if (!(dur > 0)) {
+        showToast('还没拿到总时长，播一会儿再按', 3000);
+        return;
+      }
+      const pos = currentAbsPos();
+      const rem = dur - pos;
+      if (!(rem > 5 && rem < 600)) {
+        showToast(`当前位置不合适（距结尾 ${Math.round(rem)} 秒）`, 3000);
+        return;
+      }
+      showMark.outro = Math.round(rem * 10) / 10;
+      saveShowMark();
+      showToast(`已记住片尾 ${Math.round(rem)} 秒，播到这里自动下一集`, 3200);
+    }
+
     /* ---------- 播放中跳过广告 ---------- */
     // 由 /api/ads 预先给出区间，播到区间内就跳到末尾。不改列表，时间轴不变。
     let adSkipGuard = 0;
@@ -3266,14 +3408,25 @@
 
       // 广告处理：开播前只「分析出广告在第几秒到第几秒」，**绝不改写播放列表**。
       // 播放时由播放器自己跳到区间末尾，时间轴保持原样 → 进度不会错乱、加密源也不受影响。
+      // 片头标记：没有续播进度时，直接从片头结束处开始
+      if (!(resumeAt > 1) && showMark.intro > 1) {
+        resumeAt = showMark.intro;
+        showToast(`已按标记跳过片头 ${Math.round(showMark.intro)} 秒`, 2500);
+      }
       const playUrl = finalUrl;
       let adRanges = [];
       if (/\.m3u8/i.test(finalUrl) && adFilterEnabled()) {
         try {
           const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}`)).json();
           if (r && Array.isArray(r.ranges) && r.ranges.length) {
-            adRanges = r.ranges;
-            showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
+            // 片头/片尾区间里的广告不用管：那两段本来就会被跳过
+            const durAll = Number(r.duration) || 0;
+            adRanges = r.ranges.filter(([s, e]) => {
+              if (showMark.intro > 1 && e <= showMark.intro + 1) return false;
+              if (durAll > 0 && showMark.outro > 1 && s >= durAll - showMark.outro - 1) return false;
+              return true;
+            });
+            if (adRanges.length) showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
           }
         } catch (e) {}
       }
@@ -3821,7 +3974,8 @@
       maybeAutoNext();
       if (osdEnabled()) renderOsd();
       // 播到广告区间就跳过去（区间由 /api/ads 预先给出，列表本身没被改动）
-      {
+      // 已判定"到片尾"时不再跳广告，避免两个机制互相打架
+      if (!eofHandled) {
         const p0 = isMpv()
           ? (mpvState.position || 0)
           : (compat.on ? compatPosition() : (pvVideo.currentTime || 0));

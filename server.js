@@ -7,7 +7,7 @@ const os = require('os');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const PlayerLauncher = require('./playerLauncher');
-const { ConfigRepo, HistoryRepo, FavoriteRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
+const { ConfigRepo, HistoryRepo, FavoriteRepo, ShowMarkRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
 
 const app = express();
 // 仅监听本机回环（桌面版专用，不再支持局域网访问）
@@ -897,6 +897,33 @@ app.delete('/api/history', (req, res) => {
 app.delete('/api/history/:siteKey/:vodId', (req, res) => {
   HistoryRepo.remove(req.params.siteKey, req.params.vodId);
   res.json({ success: true });
+});
+
+/* ==================== 片头 / 片尾标记（按片名） ==================== */
+
+app.get('/api/marks', (req, res) => {
+  const name = String(req.query.name || '').trim();
+  if (name) {
+    const row = ShowMarkRepo.get(name);
+    return res.json({ mark: row ? { intro: row.intro, outro: row.outro, name: row.show_name } : null });
+  }
+  res.json({ list: ShowMarkRepo.list() });
+});
+
+app.put('/api/marks', express.json(), (req, res) => {
+  const name = String((req.body && req.body.name) || '').trim();
+  if (!name) return res.status(400).json({ error: '缺少片名' });
+  const intro = Math.max(0, Math.min(900, Number(req.body.intro) || 0));
+  const outro = Math.max(0, Math.min(900, Number(req.body.outro) || 0));
+  const row = ShowMarkRepo.save(name, intro, outro);
+  res.json({ ok: true, mark: { intro: row.intro, outro: row.outro } });
+});
+
+app.delete('/api/marks', (req, res) => {
+  const name = String(req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: '缺少片名' });
+  ShowMarkRepo.remove(name);
+  res.json({ ok: true });
 });
 
 /* ==================== 收藏 ==================== */

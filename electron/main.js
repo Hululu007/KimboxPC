@@ -390,6 +390,10 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     frameCount = 0;
     lastKnownDuration = 0;
     lastKnownPosition = 0;
+    // 换文件必须清掉时间轴偏移，否则新文件的位置会被加上上一个文件的偏移（数值离谱）
+    timeOffset = 0;
+    lastRawPos = 0;
+    selfSeekUntil = Date.now() + 3000;
     playbackStarted = true;
     return { ok: true, render: `${renderW}x${renderH}` };
   } catch (e) {

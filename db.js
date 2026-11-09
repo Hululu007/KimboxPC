@@ -40,6 +40,15 @@ function openDb() {
   );
 
 
+  -- 按片名记住「片头 / 片尾」长度：做一次，该片所有集数通用
+  CREATE TABLE IF NOT EXISTS show_mark (
+    show_key   TEXT PRIMARY KEY,
+    show_name  TEXT,
+    intro      REAL NOT NULL DEFAULT 0,
+    outro      REAL NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS favorite (
     site_key   TEXT NOT NULL,
     vod_id     TEXT NOT NULL,
@@ -147,6 +156,44 @@ const HistoryRepo = {
 };
 
 /* ---------- 收藏 ---------- */
+/* ---------- 片头 / 片尾标记（按片名） ---------- */
+const ShowMarkRepo = {
+  key(name) {
+    return String(name || '')
+      .replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】\-—_]/g, '')
+      .toLowerCase();
+  },
+  get(name) {
+    const k = this.key(name);
+    if (!k) return null;
+    const row = db.prepare('SELECT * FROM show_mark WHERE show_key = ?').get(k);
+    return row || null;
+  },
+  save(name, intro, outro) {
+    const k = this.key(name);
+    if (!k) return null;
+    const now = Date.now();
+    const exist = db.prepare('SELECT * FROM show_mark WHERE show_key = ?').get(k);
+    if (exist) {
+      db.prepare('UPDATE show_mark SET intro = ?, outro = ?, show_name = ?, updated_at = ? WHERE show_key = ?')
+        .run(intro, outro, name, now, k);
+    } else {
+      db.prepare('INSERT INTO show_mark (show_key, show_name, intro, outro, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run(k, name, intro, outro, now);
+    }
+    return this.get(name);
+  },
+  remove(name) {
+    const k = this.key(name);
+    if (!k) return false;
+    db.prepare('DELETE FROM show_mark WHERE show_key = ?').run(k);
+    return true;
+  },
+  list() {
+    return db.prepare('SELECT * FROM show_mark ORDER BY updated_at DESC').all();
+  }
+};
+
 const FavoriteRepo = {
   list() {
     return db.prepare('SELECT * FROM favorite ORDER BY created_at DESC').all();
@@ -293,5 +340,6 @@ function restoreBackup(name) {
 
 module.exports = {
   db, ConfigRepo, HistoryRepo, FavoriteRepo,
+  ShowMarkRepo,
   backup, listBackups, deleteBackup, restoreBackup, countAll
 };
