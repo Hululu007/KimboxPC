@@ -3167,9 +3167,21 @@
       if (!el || !el.classList.contains('show')) return;
 
       const title = document.getElementById('mTitle');
-      const meta = document.getElementById('mMeta');
-      const epName = (currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx] &&
-        currentDetail.playSources[currentSourceIdx].episodes && currentDetail.playSources[currentSourceIdx].episodes[currentEpIdx] || {}).name || '';
+      const showTitle = (currentDetail && currentDetail.vod_name) || (title && title.textContent) || '';
+      const curSource = currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
+      const curEp = curSource && curSource.episodes && curSource.episodes[currentEpIdx];
+      const epTitle = (curEp && (curEp.title || curEp.name)) || (curSource && curSource.episodes && curSource.episodes.length > 1 ? `第 ${currentEpIdx + 1} 集` : '');
+
+      let displayTitle = showTitle;
+      if (epTitle) {
+        if (showTitle && epTitle.startsWith(showTitle)) {
+          displayTitle = epTitle;
+        } else if (showTitle) {
+          displayTitle = `${showTitle} - ${epTitle}`;
+        } else {
+          displayTitle = epTitle;
+        }
+      }
 
       let w = 0, h = 0, pos = 0, dur = 0, speed = 0, rate = 1;
       if (isMpv()) {
@@ -3188,7 +3200,7 @@
       const t3 = document.getElementById('osdTime');
       const t4 = document.getElementById('osdSpeed');
 
-      if (t1) t1.textContent = `${(title && title.textContent) || ''}${epName ? '：' + epName : ''}\n${w && h ? w + ' × ' + h : '分辨率未知'}`;
+      if (t1) t1.textContent = `${displayTitle || 'KimBoxPC'}\n${w && h ? w + ' × ' + h : '分辨率未知'}`;
       if (t1) t1.style.whiteSpace = 'pre';
       if (t2) t2.textContent = new Date().toLocaleTimeString();
       if (t3) t3.textContent = `${fmtTime(pos)} / ${dur > 0 ? fmtTime(dur) : '--:--'}`;
