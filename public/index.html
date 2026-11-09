@@ -43,10 +43,10 @@
       background: rgba(17, 20, 24, 0.95);
       backdrop-filter: blur(10px);
       border-bottom: 1px solid var(--border);
-      padding: 12px 24px;
+      padding: 10px 18px;
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 10px;
     }
 
     .logo {
@@ -83,12 +83,27 @@
 
     .config-box, .search-box {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
     }
 
-    .config-box { flex: 0 1 auto; min-width: 260px; max-width: 450px; }
-    .search-box { flex: 1 1 auto; min-width: 140px; max-width: 320px; }
+    .config-box { flex: 0 1 auto; }
+    .search-box {
+      flex: 0 0 auto;
+    }
+    #searchInput {
+      width: 210px;
+      min-width: 190px;
+      flex: 0 0 auto;
+    }
+    #searchScope {
+      width: auto;
+      min-width: 66px;
+      flex: 0 0 auto;
+    }
+    .search-box button {
+      flex: 0 0 auto;
+    }
 
     input, select {
       background: var(--card-bg);
@@ -149,7 +164,8 @@
     }
     button.ghost-btn:hover { background: #3a2226; }
 
-    select#configSelect { flex: 1 1 auto; min-width: 170px; }
+    select#configSelect { flex: 0 1 auto; min-width: 110px; max-width: 160px; }
+    select#siteSelect { max-width: 160px; min-width: 110px; }
 
     /* 分类标签栏 */
     .tabs-bar {
