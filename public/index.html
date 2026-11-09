@@ -1189,6 +1189,25 @@
   </div>
 
   <script>
+    // 前端异常上报（排查闪退：崩溃前最后一条日志往往能定位问题）
+    (function () {
+      function send(msg, src) {
+        try {
+          fetch('/api/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ msg: String(msg).slice(0, 1800), src: src })
+          }).catch(function () {});
+        } catch (e) {}
+      }
+      window.addEventListener('error', function (e) {
+        send((e.message || 'error') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0), 'renderer');
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e && e.reason;
+        send('unhandledrejection: ' + (r && r.message ? r.message : r), 'renderer');
+      });
+    })();
     let currentDetail = null;
     let currentSourceIdx = 0;
     let currentEpIdx = 0;
@@ -3021,6 +3040,7 @@
 
     /* ==================== 自动连播下一集 ==================== */
     let eofHandled = false;
+    let autoNextGuardUntil = 0;   // 自动连播冷却，防止连环切集
     let sawProgress = false;   // 本次播放是否真的推进过（用于确认「已播到结尾」而非刚开始）
 
     function autoNextEnabled() {
@@ -3033,6 +3053,7 @@
 
     /** 当前是否已播到结尾 */
     function isPlaybackEnded() {
+      if (Date.now() < autoNextGuardUntil) return false;   // 刚切过集，先别判定
       const d = seekDuration();
       const p = currentAbsPos();
       // 片尾标记：到达「总时长 - 片尾」即视为本集结束
@@ -3044,7 +3065,7 @@
 
     /** 播完自动切下一集 */
     function maybeAutoNext() {
-      if (eofHandled || !autoNextEnabled()) return;
+      if (Date.now() < autoNextGuardUntil) return;          // 冷却期内不重复切集
       if (!document.getElementById('playerView').classList.contains('active')) return;
       if (!isPlaybackEnded()) return;
 
@@ -3052,6 +3073,7 @@
       if (!source || !source.episodes || !source.episodes.length) return;
 
       eofHandled = true;
+      autoNextGuardUntil = Date.now() + 8000;   // 8 秒内不再重复触发
       const next = currentEpIdx + 1;
       if (next >= source.episodes.length) {
         showToast('已经是最后一集', 3500);
@@ -3377,6 +3399,9 @@
       const token = ++playToken;
       eofHandled = false;
       sawProgress = false;
+      // 清空上一集残留的位置/时长，避免新文件加载前被误判成「已到片尾」
+      mpvState.position = 0;
+      mpvState.duration = 0;
       const video = document.getElementById('h5Player');
 
       // 彻底重置媒体元素：只销毁 hls 实例时，video 上残留的 MediaSource

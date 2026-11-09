@@ -519,6 +519,25 @@ if (!gotLock) {
     } catch (e) {}
   });
 
+  // 渲染进程崩溃 / 子进程异常退出 → 写进 data/app.log，便于排查"闪退"
+  function logMain(line) {
+    try {
+      const f = path.join(ROOT, 'data', 'app.log');
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      const st = (() => { try { return fs.statSync(f); } catch (e) { return null; } })();
+      if (st && st.size > 512 * 1024) fs.renameSync(f, f + '.1');
+      fs.appendFileSync(f, `[${new Date().toISOString()}] [main] ${line}\n`, 'utf8');
+    } catch (e) {}
+  }
+  app.on('render-process-gone', (e, wc, details) => {
+    logMain(`render-process-gone reason=${details && details.reason} exitCode=${details && details.exitCode}`);
+  });
+  app.on('child-process-gone', (e, details) => {
+    logMain(`child-process-gone type=${details && details.type} reason=${details && details.reason}`);
+  });
+  process.on('uncaughtException', (e) => logMain(`uncaughtException: ${e && e.stack ? e.stack : e}`));
+  process.on('before-quit', () => logMain('before-quit'));
+
   app.whenReady().then(async () => {
     await startServer();
     setTimeout(createMainWindow, 300);

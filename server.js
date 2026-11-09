@@ -899,6 +899,45 @@ app.delete('/api/history/:siteKey/:vodId', (req, res) => {
   res.json({ success: true });
 });
 
+/* ==================== 运行日志（排查闪退用） ==================== */
+const LOG_FILE = path.join(__dirname, 'data', 'app.log');
+
+function appendLog(line) {
+  try {
+    fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
+    // 超过 512KB 就轮转，避免无限增长
+    try {
+      const st = fs.statSync(LOG_FILE);
+      if (st.size > 512 * 1024) fs.renameSync(LOG_FILE, LOG_FILE + '.1');
+    } catch (e) {}
+    fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${line}\n`, 'utf8');
+  } catch (e) {}
+}
+
+app.post('/api/log', express.json(), (req, res) => {
+  const msg = String((req.body && req.body.msg) || '').slice(0, 2000);
+  const src = String((req.body && req.body.src) || 'renderer').slice(0, 40);
+  if (msg) appendLog(`[${src}] ${msg}`);
+  res.json({ ok: true });
+});
+
+app.get('/api/log', (req, res) => {
+  try {
+    const txt = fs.readFileSync(LOG_FILE, 'utf8');
+    res.type('text/plain').send(txt.split('\n').slice(-200).join('\n'));
+  } catch (e) {
+    res.type('text/plain').send('(还没有日志)');
+  }
+});
+
+// 主进程级异常也记下来
+process.on('uncaughtException', (e) => {
+  appendLog(`[main] uncaughtException: ${e && e.stack ? e.stack : e}`);
+});
+process.on('unhandledRejection', (e) => {
+  appendLog(`[main] unhandledRejection: ${e && e.stack ? e.stack : e}`);
+});
+
 /* ==================== 片头 / 片尾标记（按片名） ==================== */
 
 app.get('/api/marks', (req, res) => {
