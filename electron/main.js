@@ -414,6 +414,103 @@ ipcMain.handle('shell:triggerBossKey', () => {
   return { ok: true };
 });
 
+/* ---------- 缓存管理 (仅限 %APPDATA%\KimBoxPC 临时海报与运行缓存) ---------- */
+const CACHE_SUBFOLDERS = [
+  'Cache',
+  'Code Cache',
+  'GPUCache',
+  'DawnGraphiteCache',
+  'DawnWebGPUCache',
+  'ShaderCache',
+  'GrShaderCache'
+];
+
+function getDirSize(dir) {
+  let size = 0;
+  try {
+    if (!fs.existsSync(dir)) return 0;
+    const files = fs.readdirSync(dir);
+    for (const f of files) {
+      const full = path.join(dir, f);
+      try {
+        const st = fs.statSync(full);
+        if (st.isDirectory()) size += getDirSize(full);
+        else size += st.size;
+      } catch (e) {}
+    }
+  } catch (e) {}
+  return size;
+}
+
+function cleanFolderContents(dir) {
+  let freed = 0;
+  try {
+    if (!fs.existsSync(dir)) return 0;
+    const files = fs.readdirSync(dir);
+    for (const f of files) {
+      const full = path.join(dir, f);
+      try {
+        const st = fs.statSync(full);
+        if (st.isDirectory()) {
+          freed += cleanFolderContents(full);
+          try { fs.rmdirSync(full); } catch (e) {}
+        } else {
+          freed += st.size;
+          fs.unlinkSync(full);
+        }
+      } catch (e) {}
+    }
+  } catch (e) {}
+  return freed;
+}
+
+function getAppCacheInfo() {
+  const appData = process.env.APPDATA;
+  if (!appData) return { sizeBytes: 0, sizeMB: 0, path: '' };
+  const targetDir = path.join(appData, 'kimboxpc');
+  let totalBytes = 0;
+  for (const sub of CACHE_SUBFOLDERS) {
+    totalBytes += getDirSize(path.join(targetDir, sub));
+  }
+  return {
+    sizeBytes: totalBytes,
+    sizeMB: Math.round((totalBytes / 1024 / 1024) * 100) / 100,
+    path: targetDir
+  };
+}
+
+ipcMain.handle('shell:getCacheInfo', () => {
+  return getAppCacheInfo();
+});
+
+ipcMain.handle('shell:cleanCache', async () => {
+  const before = getAppCacheInfo();
+  try {
+    const { session } = require('electron');
+    if (session && session.defaultSession) {
+      await session.defaultSession.clearCache();
+      await session.defaultSession.clearStorageData({ storages: ['cachestorage', 'shadercache'] });
+    }
+  } catch (e) {}
+
+  let freedBytes = 0;
+  const appData = process.env.APPDATA;
+  if (appData) {
+    const targetDir = path.join(appData, 'kimboxpc');
+    for (const sub of CACHE_SUBFOLDERS) {
+      freedBytes += cleanFolderContents(path.join(targetDir, sub));
+    }
+  }
+
+  const after = getAppCacheInfo();
+  const freedMB = Math.round(Math.max(freedBytes, before.sizeBytes - after.sizeBytes) / 1024 / 1024 * 100) / 100;
+  return {
+    ok: true,
+    freedMB: freedMB > 0 ? freedMB : before.sizeMB,
+    currentMB: after.sizeMB
+  };
+});
+
 /* ---------- 字幕 / 音轨 ---------- */
 ipcMain.handle('mpv:tracks', () => {
   if (!inst || !native) return { list: [], sid: null, aid: null };

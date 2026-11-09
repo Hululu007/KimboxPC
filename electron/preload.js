@@ -43,6 +43,10 @@ contextBridge.exposeInMainWorld('kimbox', {
     return () => ipcRenderer.removeListener('boss-key:wake', handler);
   },
 
+  // 缓存清理 (仅限 %APPDATA%\KimBoxPC 临时图片与运行缓存)
+  getCacheInfo: () => ipcRenderer.invoke('shell:getCacheInfo'),
+  cleanCache: () => ipcRenderer.invoke('shell:cleanCache'),
+
   // 字幕 / 音轨
   tracks: () => ipcRenderer.invoke('mpv:tracks'),
   setTrack: (kind, id) => ipcRenderer.invoke('mpv:setTrack', { kind, id }),

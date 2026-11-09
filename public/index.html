@@ -967,6 +967,7 @@
       <button onclick="addConfig()" title="添加配置源">＋ 添加</button>
       <button class="ghost-btn" onclick="openConfigManager()" title="管理配置源（可单独删除）">管理</button>
       <button class="ghost-btn" onclick="openBackupPanel()" title="备份与还原">备份</button>
+      <button class="ghost-btn" onclick="cleanAppCache()" title="清理本地海报图片与临时缓存（仅限 %APPDATA%，不影响收藏与历史）">清理缓存</button>
       <button class="ghost-btn" onclick="resetAll()" title="初始化：清空所有配置源、收藏与历史">初始化</button>
     </div>
 
@@ -1014,6 +1015,7 @@
       <div class="cfg-title">
         <span>备份与还原</span>
         <span class="grow"></span>
+        <button class="ghost-btn" onclick="cleanAppCache()" title="清理本地海报图片与临时缓存">🧹 清理缓存</button>
         <button class="ghost-btn" onclick="createBackup()">＋ 新建备份</button>
         <button class="ghost-btn" onclick="closeBackupPanel()">关闭</button>
       </div>
@@ -1832,6 +1834,44 @@
 
         box.appendChild(row);
       });
+    }
+
+    /* ==================== 缓存清理 (仅限 %APPDATA%\KimBoxPC 临时图片与运行缓存) ==================== */
+
+    async function cleanAppCache() {
+      let info = { sizeMB: 0 };
+      try {
+        if (window.kimbox && window.kimbox.getCacheInfo) {
+          info = await window.kimbox.getCacheInfo();
+        } else {
+          const r = await fetch('/api/cache/info');
+          info = await r.json();
+        }
+      } catch (e) {}
+
+      const sizeDesc = info && info.sizeMB > 0 ? `${info.sizeMB} MB` : '约 0 MB';
+      const ok = confirm(
+        `检测到当前海报图片与临时运行缓存：${sizeDesc}。\n\n` +
+        `• 存放位置：%APPDATA%\\KimBoxPC\\Cache\n` +
+        `• 说明：仅清理海报封面与临时渲染缓存，绝不影响您的配置源、收藏和播放历史。\n\n` +
+        `确定要立即清理缓存吗？`
+      );
+      if (!ok) return;
+
+      try {
+        let res = null;
+        if (window.kimbox && window.kimbox.cleanCache) {
+          res = await window.kimbox.cleanCache();
+        } else {
+          const r = await fetch('/api/cache/clean', { method: 'POST' });
+          res = await r.json();
+        }
+        const freed = res && (res.freedMB !== undefined ? res.freedMB : info.sizeMB);
+        alert(`缓存清理完成！已释放约 ${freed || 0} MB 磁盘空间。`);
+        showToast(`🧹 已清理 ${freed || 0} MB 缓存空间`);
+      } catch (e) {
+        alert('清理缓存失败: ' + e.message);
+      }
     }
 
     // 初始化：清空配置源 / 收藏 / 历史
