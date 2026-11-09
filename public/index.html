@@ -3413,10 +3413,14 @@
 
       // 广告处理：开播前只「分析出广告在第几秒到第几秒」，**绝不改写播放列表**。
       // 播放时由播放器自己跳到区间末尾，时间轴保持原样 → 进度不会错乱、加密源也不受影响。
-      // 片头标记：没有续播进度时，直接从片头结束处开始
-      if (!(resumeAt > 1) && showMark.intro > 1) {
-        resumeAt = showMark.intro;
-        showToast(`已按标记跳过片头 ${Math.round(showMark.intro)} 秒`, 2500);
+      // 片头标记：没续播进度，或续播位置还落在片头区间内 → 都从片头结束处开始
+      if (showMark.intro > 1) {
+        if (!(resumeAt > 1) || resumeAt < showMark.intro) {
+          resumeAt = showMark.intro;
+          showToast(`已按标记跳过片头 ${Math.round(showMark.intro)} 秒`, 2600);
+        } else {
+          showToast(`从上次进度 ${fmtTime(resumeAt)} 继续（片头标记 ${Math.round(showMark.intro)} 秒）`, 2600);
+        }
       }
       const playUrl = finalUrl;
       let adRanges = [];
