@@ -1104,13 +1104,6 @@
         <option value="1.5">1.5x</option>
         <option value="2">2.0x</option>
       </select>
-      <select class="ctrl-rate" id="ratioSel" onchange="setRatio(this.value)" title="画面比例">
-        <option value="orig">原画</option>
-        <option value="16:9">16:9</option>
-        <option value="4:3">4:3</option>
-        <option value="fill">填充</option>
-        <option value="crop">裁剪</option>
-      </select>
       <button class="ctrl-btn" id="btnReload" onclick="reloadCurrentEpisode()" title="重新加载当前集（从当前位置继续）"></button>
       <button class="ctrl-btn" id="btnOsd" onclick="toggleOsd()" title="信息层 (i)">ⓘ</button>
       <button class="ctrl-btn" id="btnFull" onclick="toggleFullscreen()" title="全屏 (F)"></button>
@@ -1910,7 +1903,6 @@
       // 窗口尺寸变化后重算画面比例（16:9/4:3 需要按新尺寸重新居中）
       if (document.getElementById('playerView').classList.contains('active')) {
         clearTimeout(window.__ratioTimer);
-        window.__ratioTimer = setTimeout(applyRatio, 180);
       }
     });
 
@@ -2324,8 +2316,6 @@
 
       // 进全屏先让控制条可见，之后按「鼠标静止 2.5 秒」自动隐藏；退出则立即恢复
       if (on) showBars(); else hideBars();
-
-      setTimeout(applyRatio, 120);   // 全屏/窗口尺寸变了，重算画面比例
 
       // 舞台尺寸变了，只需重建渲染缓冲，播放位置不受影响
       setTimeout(() => {
@@ -2809,9 +2799,6 @@
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
       syncCacheUI();
-      // 应用画面比例（记住上次选择）
-      setTimeout(applyRatio, 60);
-
       // 恢复信息层（OSD）显示状态
       {
         const o = document.getElementById('pvOsd');
@@ -3111,55 +3098,6 @@
     function syncCacheUI() {
       const el = document.getElementById('cacheSel');
       if (el) el.value = String(cacheSecs());
-    }
-
-    /* ---------- 画面比例（原画 / 16:9 / 4:3 / 填充 / 裁剪） ----------
-       全部用 CSS 缩放实现，mpv 与浏览器引擎通用，不改变解码。 */
-    function currentRatio() {
-      try { return localStorage.getItem('tvbox_ratio') || 'orig'; } catch (e) { return 'orig'; }
-    }
-    function setRatio(v) {
-      try { localStorage.setItem('tvbox_ratio', v); } catch (e) {}
-      applyRatio();
-      const name = { orig: '原画', '16:9': '16:9', '4:3': '4:3', fill: '填充', crop: '裁剪' }[v] || v;
-      showToast('画面比例：' + name, 1500);
-    }
-    function applyRatio() {
-      const stage = document.getElementById('pvStage');
-      const canvas = document.getElementById('mpvCanvas');
-      const video = document.getElementById('h5Player');
-      if (!stage) return;
-
-      const ratio = currentRatio();
-      const el = (canvas && canvas.classList.contains('show')) ? canvas : video;
-      const sel = document.getElementById('ratioSel');
-      if (sel && sel.value !== ratio) sel.value = ratio;
-      if (!el) return;
-
-      const sw = stage.clientWidth, sh = stage.clientHeight;
-      // 16:9 / 4:3：按目标比例算出显示尺寸并居中（object-fit: fill 会拉伸到该框）
-      const target = ratio === '16:9' ? 16 / 9 : ratio === '4:3' ? 4 / 3 : null;
-      if (target && sw > 0 && sh > 0) {
-        let w = sw, h = Math.round(w / target);
-        if (h > sh) { h = sh; w = Math.round(h * target); }
-        el.style.width = w + 'px';
-        el.style.height = h + 'px';
-        el.style.left = Math.round((sw - w) / 2) + 'px';
-        el.style.top = Math.round((sh - h) / 2) + 'px';
-        el.style.right = 'auto';
-        el.style.bottom = 'auto';
-        el.style.objectFit = 'fill';
-        return;
-      }
-
-      // 其余三种：铺满舞台后靠 object-fit 决定
-      el.style.width = '100%';
-      el.style.height = '100%';
-      el.style.left = '0';
-      el.style.top = '0';
-      el.style.right = '0';
-      el.style.bottom = '0';
-      el.style.objectFit = ratio === 'fill' ? 'fill' : ratio === 'crop' ? 'cover' : 'contain';
     }
 
     /* ---------- 信息层（OSD） ----------
