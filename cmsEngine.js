@@ -168,14 +168,21 @@ class CmsEngine {
     return item;
   }
 
+  static cleanTitle(s) {
+    return String(s || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+      .trim();
+  }
+
   static formatVideoItem(v) {
     if (!v || typeof v !== 'object') return { vod_id: '', vod_name: '未知影片', vod_pic: '', vod_remarks: '', type_name: '' };
     return {
       vod_id: String(v.vod_id !== undefined ? v.vod_id : ''),
-      vod_name: v.vod_name || '未知影片',
+      vod_name: CmsEngine.cleanTitle(v.vod_name) || '未知影片',
       vod_pic: v.vod_pic || '',
-      vod_remarks: v.vod_remarks || '',
-      type_name: v.type_name || ''
+      vod_remarks: CmsEngine.cleanTitle(v.vod_remarks) || '',
+      type_name: CmsEngine.cleanTitle(v.type_name) || ''
     };
   }
 }

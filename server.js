@@ -371,6 +371,19 @@ function withTimeout(promise, ms) {
   });
 }
 
+function cleanTitle(s) {
+  return String(s || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    .trim();
+}
+
+const normName = (s) => String(s || '')
+  .replace(/[\u200B-\u200D\uFEFF]/g, '')
+  .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+  .replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】\-_]/g, '')
+  .toLowerCase();
+
 app.get('/api/search/all', async (req, res) => {
   const wd = String(req.query.wd || '').trim();
   if (!wd) return res.json({ list: [], status: [] });
@@ -405,13 +418,13 @@ app.get('/api/search/all', async (req, res) => {
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, sites.length) }, worker));
 
-  // 同名影片合并：保留第一个，记录来源数量
+  // 同名影片合并：保留第一个，记录来源数量（清洗不可见零宽字符与标点，精准聚合）
   const merged = new Map();
   for (const v of collected) {
-    const key = String(v.vod_name || '').replace(/\s+/g, '').toLowerCase();
+    const key = normName(v.vod_name);
     if (!key) continue;
     if (!merged.has(key)) {
-      merged.set(key, { ...v, sources: 1 });
+      merged.set(key, { ...v, vod_name: cleanTitle(v.vod_name), sources: 1 });
     } else {
       merged.get(key).sources += 1;
     }
@@ -809,7 +822,7 @@ app.get('/api/ads', async (req, res) => {
 const sourceCache = new Map(); // name -> { at, data }
 const SOURCE_CACHE_TTL = 5 * 60 * 1000;
 
-const normName = (s) => String(s || '').replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】]/g, '').toLowerCase();
+// normName 已在上方统一声明
 
 app.get('/api/sources', async (req, res) => {
   const name = String(req.query.name || '').trim();
