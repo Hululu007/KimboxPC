@@ -3224,22 +3224,8 @@
       updateMarkButtons();
     }
 
-    async function saveShowMark() {
-      const name = currentDetail && currentDetail.vod_name;
-      if (!name) return;
-      try {
-        await fetch('/api/marks', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, intro: showMark.intro, outro: showMark.outro })
-        });
-      } catch (e) {}
-      updateMarkButtons();
-    }
-
     /* 长按 650ms = 清除该标记；短按 = 记录。
-       注意：click 事件在 pointerup 之后才触发，用布尔标志容易漏，
-       这里改成「时间戳抑制」：长按触发后 1.2 秒内的 click 一律忽略。 */
+       click 在 pointerup 之后才触发，用「时间戳抑制」避免长按后又被记一遍。 */
     let markPressTimer = null;
     let markSuppressClickUntil = 0;
     function markPress(which) {
@@ -3257,25 +3243,52 @@
       return Date.now() < markSuppressClickUntil;
     }
 
+    // 写入串行化：避免「记录」与「长按清除」两条请求乱序，
+    // 导致旧值把清除结果盖回去（表现为长按清了又冒出来）。
+    let markWriteChain = Promise.resolve();
+    function queueMarkWrite(task) {
+      markWriteChain = markWriteChain.then(task, task);
+      return markWriteChain;
+    }
+
+    function saveShowMark() {
+      const name = currentDetail && currentDetail.vod_name;
+      if (!name) return Promise.resolve();
+      return queueMarkWrite(async () => {
+        const intro = showMark.intro, outro = showMark.outro;   // 执行时取最新快照
+        try {
+          await fetch('/api/marks', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, intro, outro })
+          });
+        } catch (e) {}
+        updateMarkButtons();
+      });
+    }
+
     async function clearShowMark(which) {
       const name = currentDetail && currentDetail.vod_name;
       if (!name) return;
       if (which === 'intro') showMark.intro = 0;
       else if (which === 'outro') showMark.outro = 0;
       else showMark = { intro: 0, outro: 0 };
+      updateMarkButtons();
 
-      // 两个都为 0 时直接从库里删掉
-      try {
-        if (showMark.intro === 0 && showMark.outro === 0) {
-          await fetch(`/api/marks?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-        } else {
-          await fetch('/api/marks', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, intro: showMark.intro, outro: showMark.outro })
-          });
-        }
-      } catch (e) {}
+      await queueMarkWrite(async () => {
+        const intro = showMark.intro, outro = showMark.outro;
+        try {
+          if (intro === 0 && outro === 0) {
+            await fetch(`/api/marks?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+          } else {
+            await fetch('/api/marks', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, intro, outro })
+            });
+          }
+        } catch (e) {}
+      });
       updateMarkButtons();
       const label = which === 'intro' ? '片头' : which === 'outro' ? '片尾' : '本片';
       showToast(`已清除${label}标记`, 2200);
