@@ -22,7 +22,11 @@ const CANDIDATES = [
       `${PF86}\\DAUM\\PotPlayer\\PotPlayerMini.exe`,
       `${PF}\\DAUM\\PotPlayer\\PotPlayerMini.exe`
     ],
-    build: (exe, url) => ({ cmd: exe, args: [url] })
+    build: (exe, url, title, startAt) => {
+      const args = [url];
+      if (startAt && startAt > 0) args.push(`/seek=${Math.floor(startAt)}`);
+      return { cmd: exe, args };
+    }
   },
   {
     id: 'vlc',
@@ -34,7 +38,11 @@ const CANDIDATES = [
       `${PF}\\VideoLAN\\VLC\\vlc.exe`,
       `${PF86}\\VideoLAN\\VLC\\vlc.exe`
     ],
-    build: (exe, url) => ({ cmd: exe, args: ['--started-from-file', url] })
+    build: (exe, url, title, startAt) => {
+      const args = ['--started-from-file', url];
+      if (startAt && startAt > 0) args.push(`--start-time=${Math.floor(startAt)}`);
+      return { cmd: exe, args };
+    }
   },
   {
     id: 'mpv',
@@ -47,10 +55,12 @@ const CANDIDATES = [
       `${PF}\\mpv\\mpv.exe`,
       `${PF86}\\mpv\\mpv.exe`
     ],
-    build: (exe, url, title) => ({
-      cmd: exe,
-      args: ['--force-window=yes', '--osc=yes', `--title=${title}`, url]
-    })
+    build: (exe, url, title, startAt) => {
+      const args = ['--force-window=yes', '--osc=yes', `--title=${title}`];
+      if (startAt && startAt > 0) args.push(`--start=${Math.floor(startAt)}`);
+      args.push(url);
+      return { cmd: exe, args };
+    }
   },
   {
     id: 'mpc-hc',
@@ -62,7 +72,11 @@ const CANDIDATES = [
       `${PF}\\MPC-HC\\mpc-hc64.exe`,
       `${PF86}\\MPC-HC\\mpc-hc.exe`
     ],
-    build: (exe, url) => ({ cmd: exe, args: [url] })
+    build: (exe, url, title, startAt) => {
+      const args = [url];
+      if (startAt && startAt > 0) args.push('/start', `${Math.floor(startAt * 1000)}`);
+      return { cmd: exe, args };
+    }
   },
   {
     id: 'ffplay',
@@ -73,10 +87,12 @@ const CANDIDATES = [
     paths: [
       `${LOCAL}\\Microsoft\\WinGet\\Links\\ffplay.exe`
     ],
-    build: (exe, url, title) => ({
-      cmd: exe,
-      args: ['-window_title', `KimBoxPC - ${title}`, '-autoexit', url]
-    })
+    build: (exe, url, title, startAt) => {
+      const args = ['-window_title', `KimBoxPC - ${title}`, '-autoexit'];
+      if (startAt && startAt > 0) args.push('-ss', String(Math.floor(startAt)));
+      args.push(url);
+      return { cmd: exe, args };
+    }
   }
 ];
 
@@ -110,9 +126,9 @@ function listAvailable() {
   return out;
 }
 
-function launch(entry, url, title) {
+function launch(entry, url, title, startAt) {
   return new Promise((resolve, reject) => {
-    const { cmd, args } = entry.data.build(entry.exe, url, title);
+    const { cmd, args } = entry.data.build(entry.exe, url, title, startAt);
     const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
     let settled = false;
 
@@ -134,7 +150,7 @@ function launch(entry, url, title) {
 /**
  * 播放：playerId 为空则自动选择（优先带界面的）
  */
-async function play(mediaUrl, title = 'TVBox 视频', playerId = '') {
+async function play(mediaUrl, title = 'TVBox 视频', playerId = '', startAt = 0) {
   const available = listAvailable();
   if (available.length === 0) {
     throw new Error('没有找到可用的外部播放器（可以装 PotPlayer / VLC / mpv）');
@@ -154,7 +170,7 @@ async function play(mediaUrl, title = 'TVBox 视频', playerId = '') {
   for (const p of queue) {
     const data = CANDIDATES.find(c => c.id === p.id);
     try {
-      const r = await launch({ exe: p.exe, name: p.name, data }, mediaUrl, title);
+      const r = await launch({ exe: p.exe, name: p.name, data }, mediaUrl, title, startAt);
       return { success: true, ...r };
     } catch (e) {
       errors.push(`${p.name}: ${e.message}`);

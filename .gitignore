@@ -32,7 +32,7 @@ native/build/
 *.lnk
 
 # 随包的分发用安装器（体积大，不入库；打包脚本会带上）
-tools/VC_redist*.exe
+tools/*.exe
 
 # 调试临时文件
 _survey.*

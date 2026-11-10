@@ -412,7 +412,7 @@
     .pv-spacer { flex: 1 1 auto; }
     .pv-top button { padding: 7px 14px; }
     .engine-label { font-size: 12px; color: var(--text-muted); margin-left: 4px; }
-    .engine-sel { min-width: 86px; }
+    .engine-sel { min-width: 110px; }
     .engine-sel.mpv { border-color: var(--accent); color: #fff; font-weight: 600; }
     .fav-btn.faved { background: #4a3a10; color: #ffce3a; }
 
@@ -869,6 +869,35 @@
       .pv-osd span { font-size: 15px; }
     }
 
+    /* 全局悬浮提示：层级最高，可浮在弹窗、主页面之上 */
+    .global-toast {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      background: rgba(18, 22, 28, 0.96);
+      color: #f0f6fc;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+      z-index: 999999;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .global-toast.show {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(-50%) translateY(0);
+    }
+
     .pv-toast {
       position: absolute;
       left: 50%;
@@ -971,6 +1000,9 @@
   </style>
 </head>
 <body>
+
+  <!-- 全局悬浮提示（置于所有弹窗与页面之上） -->
+  <div class="global-toast" id="globalToast"></div>
 
   <!-- 顶部固定区：顶栏 + 分类栏 + 列表工具栏 -->
   <div class="topbar" id="topbar">
@@ -1130,7 +1162,7 @@
       <span class="engine-label">引擎</span>
       <select class="ctrl-rate engine-sel" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
         <option value="mpv">mpv</option>
-        <option value="browser">浏览器</option>
+        <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
@@ -1231,10 +1263,6 @@
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
             拦截插播广告（默认开启；按区间自动跳过）
           </label>
-          <label class="audio-auto">
-            本片标记
-            <span id="markSummary" style="color:#8c9ba5;font-size:12px"></span>
-          </label>
           <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢">
             缓冲
             <select id="cacheSel" class="ctrl-rate" onchange="saveCacheLevel(this.value)" style="width:auto">
@@ -1251,10 +1279,10 @@
 
 
 
-        <div class="row-label" id="engineRowLabel">播放引擎（默认 mpv 内核；浏览器作为备用）：</div>
+        <div class="row-label" id="engineRowLabel">播放引擎（默认 mpv 内核；ffmpeg 作为兼容）：</div>
         <div class="source-tabs" id="engineBtns">
           <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（推荐）</div>
-          <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">浏览器（备用）</div>
+          <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">ffmpeg (兼容)</div>
         </div>
 
         <div class="row-label" id="trackRowLabel" style="display:none;">字幕 / 音轨（mpv 模式）：</div>
@@ -1392,17 +1420,96 @@
       return data;
     }
 
-    async function bootstrap() {
-      const resp = await fetch('/api/sites');
-      const data = await resp.json();
-      if (!data.sites || data.sites.length === 0) {
+    let bootstrapTimer = null;
+    let bootstrapAttempts = 0;
+
+    async function bootstrap(forceRefresh = false) {
+      clearTimeout(bootstrapTimer);
+      if (forceRefresh) bootstrapAttempts = 0;
+
+      const sel = document.getElementById('configSelect');
+      const hasConfig = sel && sel.options.length > 0 && sel.value !== '';
+      const cfgName = (sel && sel.selectedOptions[0]) ? sel.selectedOptions[0].textContent.replace(/\s*·\s*\d+\s*站.*$/, '') : '配置源';
+
+      try {
+        const resp = await fetch('/api/sites');
+        const data = await resp.json();
+
+        // 1. 站点已就绪：正常渲染分类与首页
+        if (data.sites && data.sites.length > 0) {
+          bootstrapAttempts = 0;
+          window.__sitesVersion = data.version || 0;
+          window.__defaultSite = data.defaultSite || '';
+          fillSiteSelect(data.sites, data.activeSite);
+          refreshConfigList().catch(() => {});
+          loadHome();
+          startConfigHotSync();
+          return;
+        }
+
+        // 2. 存在配置源，但服务端正在拉取或尚未完成初始化：轮询重试（最多 15 次，约 9 秒）
+        if (hasConfig || data.loading || data.configId) {
+          if (bootstrapAttempts < 15) {
+            bootstrapAttempts++;
+            renderCategories([]);
+            showStatus(`正在拉取「${cfgName}」的站点数据，请稍候…`);
+            bootstrapTimer = setTimeout(() => bootstrap(), 600);
+            return;
+          }
+          // 多次重试仍无站点（例如断网或源彻底失效）
+          renderCategories([]);
+          const errDetail = data.error ? `（${data.error}）` : '';
+          showStatus(
+            `<div style="font-size:15px;margin-bottom:8px;">配置源「${cfgName}」加载超时${errDetail}</div>` +
+            `<div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">请检查网络或配置源地址是否可访问</div>` +
+            `<button class="secondary" style="padding:6px 18px;" onclick="bootstrap(true)">🔄 重新拉取</button>`
+          );
+          return;
+        }
+
+        // 3. 确实没有任何配置源（初次使用）
         renderCategories([]);
         showStatus('还没有可用的配置源。点击顶部「＋ 添加」输入 TVBox / FongMi 配置地址。');
-        return;
+      } catch (e) {
+        if (hasConfig && bootstrapAttempts < 10) {
+          bootstrapAttempts++;
+          bootstrapTimer = setTimeout(() => bootstrap(), 800);
+          return;
+        }
+        showStatus('连接本地服务出错: ' + e.message);
       }
-      window.__defaultSite = data.defaultSite || '';
-      fillSiteSelect(data.sites, data.activeSite);
-      loadHome();
+    }
+
+    /* 后台热同步检测：当远程静默拉取完毕且检测到站点更新时，前端自动热重载，无需重启 */
+    let hotSyncTimer = null;
+    function startConfigHotSync() {
+      if (hotSyncTimer) clearInterval(hotSyncTimer);
+      let checks = 0;
+      hotSyncTimer = setInterval(async () => {
+        checks++;
+        if (checks > 10) {
+          clearInterval(hotSyncTimer);
+          hotSyncTimer = null;
+          return;
+        }
+        try {
+          const resp = await fetch('/api/sites');
+          const data = await resp.json();
+          if (data && data.version && window.__sitesVersion && data.version !== window.__sitesVersion && Array.isArray(data.sites)) {
+            const oldCount = (window.__siteList || []).length;
+            const newCount = data.sites.length;
+            window.__sitesVersion = data.version;
+            window.__defaultSite = data.defaultSite || '';
+            renderSiteOptions(data.sites, activeSiteKey);
+            refreshConfigList().catch(() => {});
+            if (newCount !== oldCount) {
+              showToast(`✨ 配置源已同步最新（共 ${newCount} 站）`, 2500);
+            }
+            clearInterval(hotSyncTimer);
+            hotSyncTimer = null;
+          }
+        } catch (e) {}
+      }, 2500);
     }
 
     // 站点延迟（由 /api/sites/ping 填充）：{ 站点key: { ms, ok } }
@@ -1629,8 +1736,10 @@
         const resp = await fetch(`/api/configs/${id}/activate`, { method: 'POST' });
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
+        window.__sitesVersion = data.version || 0;
         fillSiteSelect(data.sites || [], data.activeSite);
         loadHome();
+        startConfigHotSync();
       } catch (e) {
         showStatus('切换失败: ' + e.message);
       }
@@ -1778,9 +1887,11 @@
         main.innerHTML = `
           <div class="cfg-name"></div>
           <div class="cfg-url"></div>
+          <div class="cfg-hint" style="font-size:11px; margin-top:3px; display:none;"></div>
         `;
         main.querySelector('.cfg-name').textContent = c.name || c.url;
         main.querySelector('.cfg-url').textContent = c.url;
+        const hintEl = main.querySelector('.cfg-hint');
         row.appendChild(main);
 
         if (isCurrent) {
@@ -1799,6 +1910,52 @@
           };
           row.appendChild(useBtn);
         }
+
+        const syncBtn = document.createElement('button');
+        syncBtn.className = 'secondary';
+        syncBtn.textContent = '🔄 同步';
+        syncBtn.title = '强制向远程服务器检查更新并刷新本地快照';
+        syncBtn.onclick = async () => {
+          syncBtn.disabled = true;
+          syncBtn.textContent = '检测中…';
+          hintEl.style.display = 'block';
+          hintEl.style.color = 'var(--text-muted)';
+          hintEl.textContent = '正在连接远程服务器并比对站点指纹…';
+
+          try {
+            const r = await fetch(`/api/configs/${c.id}/sync`, { method: 'POST' });
+            const d = await r.json();
+            if (d.error) throw new Error(d.error);
+
+            if (d.isCurrent && d.hasChanged) {
+              window.__sitesVersion = d.version;
+              renderSiteOptions(d.sites, activeSiteKey);
+            }
+            await refreshConfigList();
+
+            if (d.hasChanged) {
+              const diffText = d.diffCount > 0 ? `（新增 ${d.diffCount} 站，共 ${d.siteCount} 站）` : `（站点已变更，共 ${d.siteCount} 站）`;
+              hintEl.style.display = 'block';
+              hintEl.style.color = '#4ade80';
+              hintEl.textContent = `✨ 已更新至最新${diffText}`;
+              showToast(`✨ 「${c.name || '配置'}」已更新至最新${diffText}`, 3200);
+            } else {
+              hintEl.style.display = 'block';
+              hintEl.style.color = '#38bdf8';
+              hintEl.textContent = `✅ 已是最新版本（共 ${d.siteCount} 站，暂无更新）`;
+              showToast(`✅ 「${c.name || '配置'}」已是最新版本（共 ${d.siteCount} 站，暂无更新）`, 2600);
+            }
+          } catch (err) {
+            hintEl.style.display = 'block';
+            hintEl.style.color = '#ff6b6b';
+            hintEl.textContent = `❌ 同步失败: ${err.message}`;
+            showToast(`❌ 同步失败: ${err.message}`, 4000);
+          } finally {
+            syncBtn.disabled = false;
+            syncBtn.textContent = '🔄 同步';
+          }
+        };
+        row.appendChild(syncBtn);
 
         const renameBtn = document.createElement('button');
         renameBtn.className = 'secondary';
@@ -2337,18 +2494,26 @@
 
     async function changeEngine(v) {
       const prev = engineMode();
-      try { localStorage.setItem('tvbox_engine', v); } catch (e) {}
+      const keepPos = currentAbsPos();
 
-      // 引擎切换必须先停掉旧引擎，否则两路同时出声
+      // 引擎切换必须先彻底停掉旧引擎（特别是兼容模式与转封装进程），避免两路同时出声或并发冲突卡死
       if (prev !== v) {
-        try { pvVideo.pause(); } catch (e) {}
+        destroyCompat();
         if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+        try { pvVideo.pause(); } catch (e) {}
         try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
-        await stopMpvPlayback();
+        if (prev === 'mpv') {
+          await stopMpvPlayback();
+        }
       }
+
+      try { localStorage.setItem('tvbox_engine', v); } catch (e) {}
+      syncEngineUI();
+
       if (v === 'mpv') showToast('已切换到 mpv 内核，正在重载…', 2500);
-      if (currentDetail) reloadCurrentEpisode(true);
-      else syncEngineUI();
+      else showToast('已切换到 ffmpeg 兼容内核，正在重载…', 2500);
+
+      if (currentDetail) reloadCurrentEpisode(true, keepPos);
     }
 
     function syncEngineUI() {
@@ -2708,12 +2873,18 @@
       if (currentDetail) reloadCurrentEpisode(true);
     }
 
+    window.kimboxIsCompatPlaying = () => !!(compat && compat.on && compat.player);
+
     function destroyCompat() {
+      compat.on = false;
+      compat.url = '';
       if (compat.player) {
+        try { compat.player.pause(); } catch (e) {}
+        try { compat.player.unload(); } catch (e) {}
+        try { compat.player.detachMediaElement(); } catch (e) {}
         try { compat.player.destroy(); } catch (e) {}
         compat.player = null;
       }
-      compat.on = false;
     }
 
     /** 用转封装流起播（startAt 为整片秒数） */
@@ -2771,6 +2942,7 @@
     /* ==================== 同片源聚合（延迟排序） ==================== */
 
     let pendingEpIdx = null;
+    let pendingPos = null;
 
     async function loadAllSources(name, currentSiteKey) {
       const box = document.getElementById('mAllSources');
@@ -2815,11 +2987,12 @@
       }
     }
 
-    // 换到另一个站点的同片源，尽量停留在同一集
+    // 换到另一个站点的同片源，尽量停留在同一集并保留当前播放进度
     function switchToSource(item) {
       const keepEp = currentEpIdx;
+      const keepPos = currentAbsPos();
       showToast(`正在切换到 ${item.siteName}…`, 3000);
-      openDetail(item.vodId, item.siteKey, keepEp);
+      openDetail(item.vodId, item.siteKey, keepEp, keepPos);
     }
 
     /* ==================== 收藏 / 历史 ==================== */
@@ -2956,7 +3129,7 @@
       list.forEach(v => grid.appendChild(buildCard(v)));
     }
 
-    async function openDetail(id, siteKey, targetEpIdx = null) {
+    async function openDetail(id, siteKey, targetEpIdx = null, targetPos = null) {
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
@@ -2976,6 +3149,7 @@
       document.getElementById('pvPanelLabel').textContent = '选集';
       setPanelCollapsed(true);
       pendingEpIdx = (targetEpIdx === null || targetEpIdx === undefined) ? null : targetEpIdx;
+      pendingPos = (typeof targetPos === 'number' && targetPos > 0) ? targetPos : null;
       showToast('正在获取影片详情...', 6000);
 
       try {
@@ -2983,6 +3157,8 @@
         const resp = await fetch(`/api/detail?id=${encodeURIComponent(id)}&siteKey=${encodeURIComponent(key)}`);
         const detail = await resp.json();
         if (!detail || detail.error) {
+          pendingEpIdx = null;
+          pendingPos = null;
           showToast('获取详情失败: ' + (detail && detail.error ? detail.error : '该片可能已下架'), 3000);
           document.getElementById('mTitle').textContent = '获取失败';
           return;
@@ -3007,6 +3183,8 @@
         // 异步聚合同片源（不阻塞播放）
         loadAllSources(detail.vod_name, detail.siteKey || activeSiteKey);
       } catch (e) {
+        pendingEpIdx = null;
+        pendingPos = null;
         showToast('加载影片详情出错: ' + e.message, 3000);
       }
     }
@@ -3100,10 +3278,11 @@
         tab.className = `source-tab ${idx === currentSourceIdx ? 'active' : ''}`;
         tab.textContent = src.sourceName;
         tab.onclick = () => {
+          const keepPos = currentAbsPos();
           document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
           tab.classList.add('active');
           currentSourceIdx = idx;
-          renderEpisodes(true);
+          renderEpisodes(true, keepPos);
         };
         container.appendChild(tab);
       });
@@ -3111,7 +3290,7 @@
       renderEpisodes();
     }
 
-    function renderEpisodes(isManualSwitch = false) {
+    function renderEpisodes(isManualSwitch = false, targetPos = null) {
       const container = document.getElementById('mEpisodes');
       container.innerHTML = '';
       const source = currentDetail.playSources[currentSourceIdx];
@@ -3122,11 +3301,16 @@
       let resumeAt = 0;
       if (pendingEpIdx !== null && pendingEpIdx !== undefined) {
         startIdx = Math.min(Math.max(0, pendingEpIdx), source.episodes.length - 1);
-        resumeAt = 0;
+        if (startIdx === pendingEpIdx && pendingPos > 0) {
+          resumeAt = pendingPos;
+        }
         pendingEpIdx = null;
+        pendingPos = null;
       } else if (isManualSwitch) {
         startIdx = Math.min(Math.max(0, currentEpIdx || 0), source.episodes.length - 1);
-        resumeAt = 0;
+        if (typeof targetPos === 'number' && targetPos > 0) {
+          resumeAt = targetPos;
+        }
       } else if (h && (!h.source || h.source === source.sourceName)) {
         startIdx = Math.min(Math.max(0, Number(h.ep_index) || 0), source.episodes.length - 1);
         resumeAt = Number(h.position) || 0;
@@ -3159,12 +3343,22 @@
     }
 
     function showToast(text, timeout = 2600) {
+      // 1. 全局轻提示（置于所有弹窗与页面之上，层级最高）
+      const gt = document.getElementById('globalToast');
+      if (gt) {
+        gt.textContent = text;
+        gt.classList.add('show');
+        clearTimeout(gt._t);
+        gt._t = setTimeout(() => gt.classList.remove('show'), timeout);
+      }
+      // 2. 播放器画面内轻提示（全屏或播放视口内同步显示）
       const el = document.getElementById('pvToast');
-      if (!el) return;
-      el.textContent = text;
-      el.classList.add('show');
-      clearTimeout(el._t);
-      el._t = setTimeout(() => el.classList.remove('show'), timeout);
+      if (el) {
+        el.textContent = text;
+        el.classList.add('show');
+        clearTimeout(el._t);
+        el._t = setTimeout(() => el.classList.remove('show'), timeout);
+      }
     }
 
     const DIRECT_MEDIA_RE = /\.(m3u8|mp4|flv|mkv|ts|webm|mp3|m4a)(\?|#|$)/i;
@@ -3263,6 +3457,7 @@
         return [15, 30, 60, 120, 180, 240, 300].includes(v) ? v : 30;
       } catch (e) { return 30; }
     }
+    window.kimboxCacheSecs = cacheSecs;
     function saveCacheLevel(v) {
       try { localStorage.setItem('tvbox_cache', String(v)); } catch (e) {}
       showToast(`缓冲已设为 ${v} 秒（重新打开该集生效）`, 2500);
@@ -3369,12 +3564,7 @@
       const b = document.getElementById('btnMarkOutro');
       if (a) a.textContent = showMark.intro > 0 ? `片头 ${Math.round(showMark.intro)}s` : '片头';
       if (b) b.textContent = showMark.outro > 0 ? `片尾 ${Math.round(showMark.outro)}s` : '片尾';
-      const s = document.getElementById('markSummary');
-      if (s) {
-        s.textContent = (showMark.intro > 0 || showMark.outro > 0)
-          ? `片头 ${Math.round(showMark.intro)}s · 片尾 ${Math.round(showMark.outro)}s（长按按钮即清除）`
-          : '未设置（播到片头结束按「片头」，快到结尾按「片尾」）';
-      }
+
     }
 
     async function loadShowMark() {
@@ -3714,14 +3904,56 @@
     document.getElementById('h5Player').addEventListener('timeupdate', () => saveHistory(false));
     document.getElementById('h5Player').addEventListener('pause', () => saveHistory(true));
 
+    /** 彻底停止/暂停应用内当前视频播放（彻底静音、停止走秒，保留画面与进度可手动恢复） */
+    function pauseCurrentPlayback() {
+      try { saveHistory(true); } catch (e) {}
+
+      if (isMpv()) {
+        try {
+          mpvCmd('set_property', ['pause', true]);
+          mpvCmd('set', ['pause', 'yes']);
+          mpvState.paused = true;
+        } catch (e) {}
+      }
+
+      const v = document.getElementById('h5Player');
+      if (v && !v.paused) {
+        try { v.pause(); } catch (e) {}
+      }
+      if (compat && compat.player) {
+        try { compat.player.stopLoad(); } catch (e) {}
+      }
+
+      const btnPlay = document.getElementById('btnPlay');
+      if (btnPlay) btnPlay.innerHTML = ICON.play;
+      try { showBars(); } catch (e) {}
+    }
+
     async function playWithExternalPlayer() {
       if (!currentDetail) return;
       const source = currentDetail.playSources[currentSourceIdx];
       if (!source || !source.episodes || !source.episodes[currentEpIdx]) return;
 
       const ep = source.episodes[currentEpIdx];
-      const video = document.getElementById('h5Player');
-      video.pause();
+
+      // 1. 获取当前播放进度（秒）
+      const v = document.getElementById('h5Player');
+      const curPos = isMpv()
+        ? (mpvState.position || 0)
+        : (compat && compat.on ? compatPosition() : (v && isFinite(v.currentTime) ? v.currentTime : 0));
+
+      // 2. 若当前处于全屏状态，退出全屏避免遮挡弹出的 PC 播放器
+      if (nativeFullscreen && isNativeShell()) {
+        try { window.kimbox.setFullscreen(false); } catch (e) {}
+        nativeFullscreen = false;
+        document.getElementById('playerView').classList.remove('native-fs');
+      }
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+
+      // 3. 立即彻底停止应用内播放（静音、暂停 mpv/h5、停止走秒）
+      pauseCurrentPlayback();
 
       const playerSel = document.getElementById('playerSel');
       const player = playerSel ? playerSel.value : '';
@@ -3749,7 +3981,8 @@
           body: JSON.stringify({
             url: playUrl,
             title: `${currentDetail.vod_name} - ${ep.title}`,
-            player
+            player,
+            startAt: curPos
           })
         });
         const data = await resp.json();
@@ -3758,7 +3991,7 @@
           return;
         }
         if (data.hasUi) {
-          showToast(`已用 ${data.player} 打开（有完整播放界面）`, 3000);
+          showToast(`已用 ${data.player} 打开（已停止应用内播放）`, 3000);
         } else {
           showToast(`${data.player} 没有控制条，快捷键：空格 暂停 / ←→ 快进 / f 全屏 / q 退出`, 6000);
         }
@@ -4020,7 +4253,7 @@
     }
 
     // 重新加载当前集：从**当前播放位置**继续，不回到 0
-    function reloadCurrentEpisode(silent = false) {
+    function reloadCurrentEpisode(silent = false, forceAt = null) {
       if (!currentDetail) return;
       const source = currentDetail.playSources && currentDetail.playSources[currentSourceIdx];
       const ep = source && source.episodes && source.episodes[currentEpIdx];
@@ -4028,15 +4261,19 @@
 
       // 三种引擎的位置来源不同：mpv 用状态、兼容模式用 base+currentTime、直连用 currentTime
       let at = 0;
-      try {
-        if (isMpv()) {
-          at = mpvState.position || 0;
-        } else if (compat.on) {
-          at = compatPosition() || 0;
-        } else if (isFinite(pvVideo.currentTime)) {
-          at = pvVideo.currentTime;
-        }
-      } catch (e) {}
+      if (forceAt !== null && forceAt !== undefined && typeof forceAt === 'number' && forceAt >= 0) {
+        at = forceAt;
+      } else {
+        try {
+          if (isMpv()) {
+            at = mpvState.position || 0;
+          } else if (compat.on) {
+            at = compatPosition() || 0;
+          } else if (isFinite(pvVideo.currentTime)) {
+            at = pvVideo.currentTime;
+          }
+        } catch (e) {}
+      }
       if (!(at > 0)) at = 0;
 
       if (!silent) {
@@ -4389,30 +4626,12 @@
     }
 
     function handleBossKeyPause() {
-      if (isMpv()) {
-        try { mpvCmd('set', ['pause', 'yes']); } catch (e) {}
-      }
-      const v = document.getElementById('h5Player');
-      if (v) {
-        try { v.pause(); } catch (e) {}
-      }
-      const btnPlay = document.getElementById('btnPlay');
-      if (btnPlay) btnPlay.innerHTML = ICON.play;
-      try { saveHistory(true); } catch (e) {}
-      try { showBars(); } catch (e) {}
+      pauseCurrentPlayback();
     }
 
     function handleBossKeyWake() {
       // 唤醒后：保持暂停状态，绝不自动播放！
-      if (isMpv()) {
-        try { mpvCmd('set', ['pause', 'yes']); } catch (e) {}
-      }
-      const v = document.getElementById('h5Player');
-      if (v && !v.paused) {
-        try { v.pause(); } catch (e) {}
-      }
-      const btnPlay = document.getElementById('btnPlay');
-      if (btnPlay) btnPlay.innerHTML = ICON.play;
+      pauseCurrentPlayback();
       showToast('🐟 已唤醒（已暂停，请手动点击播放）', 3000);
     }
 

@@ -65,12 +65,51 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+const CONFIG_CACHE_DIR = path.join(__dirname, 'data', 'cache');
+if (!fs.existsSync(CONFIG_CACHE_DIR)) {
+  try { fs.mkdirSync(CONFIG_CACHE_DIR, { recursive: true }); } catch (e) {}
+}
+
+function saveConfigCache(id, parsed) {
+  try {
+    const file = path.join(CONFIG_CACHE_DIR, `config_${id}.json`);
+    fs.writeFileSync(file, JSON.stringify(parsed), 'utf8');
+  } catch (e) {}
+}
+
+function loadConfigCache(id) {
+  try {
+    const file = path.join(CONFIG_CACHE_DIR, `config_${id}.json`);
+    if (fs.existsSync(file)) {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    }
+  } catch (e) {}
+  return null;
+}
+
+function removeConfigCache(id) {
+  try {
+    const file = path.join(CONFIG_CACHE_DIR, `config_${id}.json`);
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch (e) {}
+}
+
+function clearAllConfigCache() {
+  try {
+    const files = fs.readdirSync(CONFIG_CACHE_DIR);
+    for (const f of files) fs.unlinkSync(path.join(CONFIG_CACHE_DIR, f));
+  } catch (e) {}
+}
+
 // 当前运行状态
 const state = {
   configId: null,
   url: '',
   sites: [],
-  activeSite: null
+  activeSite: null,
+  loading: false,
+  loadError: null,
+  sitesVersion: Date.now()
 };
 
 function publicSite(s) {
@@ -78,13 +117,62 @@ function publicSite(s) {
 }
 
 async function applyConfig(row) {
-  const parsed = await ConfigParser.load(row.url);
   state.configId = row.id;
   state.url = row.url;
-  state.sites = parsed.sites || [];
-  const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
-  state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
-  ConfigRepo.touch(row.id);
+  state.loading = true;
+  state.loadError = null;
+  state.sitesVersion = Date.now();
+
+  // 1. 本地缓存秒开：优先恢复上次解析成功的站点，0ms 即可响应前端，杜绝启动竞态
+  const cached = loadConfigCache(row.id);
+  if (cached && Array.isArray(cached.sites) && cached.sites.length > 0) {
+    state.sites = cached.sites;
+    const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
+    state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+    state.loading = false;
+  }
+
+  // 2. 异步拉取/刷新远程配置
+  const fetchRemote = async () => {
+    try {
+      const parsed = await ConfigParser.load(row.url);
+      if (parsed && Array.isArray(parsed.sites) && parsed.sites.length > 0) {
+        const oldFingerprint = (state.sites || []).map(s => `${s.key}:${s.api || ''}:${s.name || ''}`).join('|');
+        const newFingerprint = parsed.sites.map(s => `${s.key}:${s.api || ''}:${s.name || ''}`).join('|');
+        const hasChanged = oldFingerprint !== newFingerprint;
+
+        state.sites = parsed.sites;
+        const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
+        state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+        saveConfigCache(row.id, parsed);
+        state.loadError = null;
+
+        if (hasChanged) {
+          state.sitesVersion = Date.now();
+          console.log(`[config] 远程配置检测到更新（共 ${parsed.sites.length} 站），已刷新本地快照并更新版本号`);
+        }
+      }
+    } catch (e) {
+      state.loadError = e.message;
+      if (!state.sites || state.sites.length === 0) {
+        console.error(`[config] 配置源 ${row.name || row.url} 加载失败:`, e.message);
+        throw e;
+      } else {
+        console.log(`[config] 远程拉取失败 (${e.message})，继续沿用本地缓存 (${state.sites.length} 站)`);
+      }
+    } finally {
+      state.loading = false;
+      ConfigRepo.touch(row.id);
+    }
+  };
+
+  if (!cached || !cached.sites || cached.sites.length === 0) {
+    await fetchRemote();
+  } else {
+    // 已有缓存：后台异步更新，绝不阻塞启动响应
+    fetchRemote().catch(() => {});
+  }
+
   return state;
 }
 
@@ -115,7 +203,9 @@ app.get('/api/configs', (req, res) => {
   res.json({
     configs,
     current: { id: state.configId, url: state.url },
-    liveSiteCount: live
+    liveSiteCount: live,
+    loading: !!state.loading,
+    loadError: state.loadError || null
   });
 });
 
@@ -146,6 +236,7 @@ app.post('/api/configs', async (req, res) => {
 
 app.delete('/api/configs/:id', async (req, res) => {
   const id = Number(req.params.id);
+  removeConfigCache(id);
   ConfigRepo.remove(id);
 
   if (state.configId === id) {
@@ -178,10 +269,64 @@ app.post('/api/configs/:id/activate', async (req, res) => {
       success: true,
       siteCount: state.sites.length,
       sites: state.sites.map(publicSite),
-      activeSite: state.activeSite ? state.activeSite.key : null
+      activeSite: state.activeSite ? state.activeSite.key : null,
+      version: state.sitesVersion || 0
     });
   } catch (e) {
     res.status(500).json({ error: '配置加载失败: ' + e.message });
+  }
+});
+
+// 手动强制同步指定配置源（绕过本地缓存直接拉取远程，并更新本地快照）
+app.post('/api/configs/:id/sync', async (req, res) => {
+  const id = Number(req.params.id);
+  const row = ConfigRepo.get(id);
+  if (!row) return res.status(404).json({ error: '配置不存在' });
+
+  try {
+    const cached = loadConfigCache(row.id);
+    const oldSites = (state.configId === id && state.sites && state.sites.length > 0)
+      ? state.sites
+      : ((cached && cached.sites) || []);
+    const oldFingerprint = oldSites.map(s => `${s.key}:${s.api || ''}:${s.name || ''}`).join('|');
+
+    const parsed = await ConfigParser.load(row.url);
+    if (!parsed || !Array.isArray(parsed.sites) || parsed.sites.length === 0) {
+      return res.status(400).json({ error: '远程配置未解析到任何有效站点' });
+    }
+
+    const newFingerprint = parsed.sites.map(s => `${s.key}:${s.api || ''}:${s.name || ''}`).join('|');
+    const hasChanged = oldFingerprint !== newFingerprint;
+    const oldCount = oldSites.length;
+    const newCount = parsed.sites.length;
+    const diffCount = newCount - oldCount;
+
+    saveConfigCache(row.id, parsed);
+    ConfigRepo.touch(row.id);
+
+    const isCurrent = (state.configId === id);
+    if (isCurrent && hasChanged) {
+      state.sites = parsed.sites;
+      const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
+      state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+      state.loadError = null;
+      state.sitesVersion = Date.now();
+    }
+
+    res.json({
+      success: true,
+      isCurrent,
+      hasChanged,
+      oldCount,
+      newCount,
+      diffCount,
+      siteCount: newCount,
+      sites: isCurrent ? state.sites.map(publicSite) : parsed.sites.map(publicSite),
+      activeSite: isCurrent && state.activeSite ? state.activeSite.key : null,
+      version: state.sitesVersion || 0
+    });
+  } catch (e) {
+    res.status(500).json({ error: '同步失败: ' + e.message });
   }
 });
 
@@ -211,7 +356,11 @@ app.get('/api/sites', (req, res) => {
   res.json({
     sites: state.sites.map(publicSite),
     activeSite: state.activeSite ? state.activeSite.key : null,
-    defaultSite: row ? row.default_site : ''
+    defaultSite: row ? row.default_site : '',
+    configId: state.configId,
+    loading: !!state.loading,
+    error: state.loadError || null,
+    version: state.sitesVersion || 0
   });
 });
 
@@ -596,6 +745,7 @@ app.get('/api/remux', (req, res) => {
   }
 
   remuxSessions.add(proc);
+  if (proc.stderr) proc.stderr.resume(); // 丢弃并排空 stderr，防止 64KB 管道阻塞死锁
 
   // 降低 ffmpeg 优先级，避免抢占播放/界面所需的 CPU
   try {
@@ -1089,6 +1239,7 @@ app.post('/api/reset', (req, res) => {
     if (scope === 'all' || scope === 'favorites' || scope === 'history') backup('before-reset');
     if (scope === 'all' || scope === 'configs') {
       ConfigRepo.clear();
+      clearAllConfigCache();
       state.configId = null;
       state.url = '';
       state.sites = [];
@@ -1202,10 +1353,10 @@ app.get('/api/players', (req, res) => {
 });
 
 app.post('/api/play/external', async (req, res) => {
-  const { url, title, player } = req.body || {};
+  const { url, title, player, startAt } = req.body || {};
   if (!url) return res.status(400).json({ error: '缺少播放 URL' });
   try {
-    res.json(await PlayerLauncher.play(url, title || 'TVBox 视频', player || ''));
+    res.json(await PlayerLauncher.play(url, title || 'TVBox 视频', player || '', Number(startAt) || 0));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
