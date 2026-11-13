@@ -222,7 +222,7 @@ function createMainWindow() {
 
   mainWin.on('closed', () => {
     mainWin = null;
-    stopPlayback();
+    destroyInstance();
     app.quit();
   });
 }
@@ -577,15 +577,22 @@ function mpvLog(msg) {
 function stopPlayback() {
   stopRenderLoop();
   if (!inst || !native) return;
+  // 只「停播」不销毁：libmpv 在拉流/解码过程中被 destroy 偶发原生崩溃
+  // （E2E 实测同一位置崩了两次，退出码 0xFFFF7003）。
+  // 实例保留为空闲状态，下次 loadfile 直接复用；真正销毁放到退出时。
+  try { native.setProp(inst, 'pause', true); } catch (e) {}
+  try { native.command(inst, ['stop']); } catch (e) {}
+  mpvLog('stop (keep instance)');
+}
+
+/** 只在进程退出/窗口关闭时真正销毁实例 */
+function destroyInstance() {
+  stopRenderLoop();
+  if (!inst || !native) return;
   const old = inst;
-  inst = null;              // 先断开引用，避免渲染循环/状态查询再摸到它
-  // 先暂停并 stop，给 mpv 的网络/解码线程一点时间收尾，再销毁实例：
-  // 在 HLS 还在拉流时直接 destroy 偶发原生崩溃（crashpad 有记录，退出码 0xFFFF7003）。
-  try { native.setProp(old, 'pause', true); } catch (e) {}
-  try { native.command(old, ['stop']); } catch (e) {}
-  setTimeout(() => {
-    try { native.destroy(old); mpvLog('destroy'); } catch (e) {}
-  }, 150);
+  inst = null;
+  try { native.destroy(old); } catch (e) {}
+  mpvLog('destroy');
 }
 
 function ensureInstance(opts) {
@@ -889,7 +896,7 @@ if (!gotLock) {
 }
 
 app.on('window-all-closed', () => {
-  stopPlayback();
+  destroyInstance();
   try { globalShortcut.unregisterAll(); } catch (e) {}
   app.quit();
 });
@@ -899,6 +906,7 @@ app.on('will-quit', () => {
 });
 
 app.on('before-quit', () => {
-  stopPlayback();
+  destroyInstance();
   try { globalShortcut.unregisterAll(); } catch (e) {}
 });
+
