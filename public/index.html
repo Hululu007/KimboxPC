@@ -384,6 +384,80 @@
       outline: none;
     }
 
+    /* ===== 广告调试面板（D 键或顶栏 🐞 开关） ===== */
+    .ad-debug {
+      position: absolute;
+      top: 56px;
+      right: 14px;
+      z-index: 60;
+      width: 320px;
+      max-height: 62%;
+      display: none;
+      flex-direction: column;
+      background: rgba(16, 19, 23, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      font-size: 11px;
+      line-height: 1.55;
+      color: #d6dee6;
+      overflow: hidden;
+    }
+    .ad-debug.show { display: flex; }
+    .ad-debug-hd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px;
+      background: rgba(229, 9, 20, 0.16);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      font-weight: 600;
+      color: #fff;
+    }
+    .ad-debug-hd button {
+      background: none;
+      border: 0;
+      color: var(--text-muted);
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+    }
+    .ad-debug-hd button:hover { color: #fff; }
+    .ad-debug-body {
+      padding: 8px 10px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .ad-debug-body .ad-row { color: #ffd479; }
+    .ad-debug-body .ad-row.tail::after {
+      content: " 片尾";
+      color: #7fd4ff;
+    }
+    .ad-debug-body .ad-dim { color: #7f8c98; }
+    .ad-debug-ft {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      font-family: Consolas, "Courier New", monospace;
+    }
+    .ad-debug-ft button {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #d6dee6;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .ad-debug-ft button:hover { background: rgba(255, 255, 255, 0.18); }
+
     .pv-top {
       flex: 0 0 auto;
       display: flex;
@@ -1165,6 +1239,7 @@
         <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
+      <button class="secondary" id="btnAdDebug" onclick="toggleAdDebug()" title="显示检测到的广告区间、跳转目标与分块结构（快捷键 D）">🐞 调试</button>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
       <button class="secondary" onclick="toggleFullscreen()">⛶ 全屏 (F)</button>
       <select class="ctrl-rate" id="playerSel" title="选择外部播放器"></select>
@@ -1172,6 +1247,17 @@
     </div>
 
     <div class="pv-stage" id="pvStage">
+      <div class="ad-debug" id="adDebugPanel">
+        <div class="ad-debug-hd">
+          <span>🐞 广告调试</span>
+          <button onclick="toggleAdDebug(false)" title="关闭（D）">×</button>
+        </div>
+        <div class="ad-debug-body" id="adDebugBody">（尚未播放）</div>
+        <div class="ad-debug-ft">
+          <span id="adDebugNow">--:--</span>
+          <button onclick="copyAdDebug()">复制</button>
+        </div>
+      </div>
       <div class="pv-osd" id="pvOsd">
         <span class="osd-tl" id="osdTitle"></span>
         <span class="osd-tr" id="osdClock"></span>
@@ -1344,6 +1430,7 @@
       await refreshConfigList();
       await loadPlayers();
       await initBossKey();
+      if (adDebugOn()) toggleAdDebug(true);   // 上次开着就继续显示
       await bootstrap();
     };
 
@@ -3749,9 +3836,131 @@
           pvVideo.currentTime = target;
         }
       } catch (err) {}
+      if (adDebugOn()) {
+        const msg = `[ad] 跳过 #${i + 1} 区间 ${fmtAd(s)}–${fmtAd(e)} 位置 ${fmtAd(pos)} → ${fmtAd(target)}${ranges[i][3] === 1 ? '（片尾）' : ''}`;
+        try { console.log(msg); } catch (e) {}
+        try {
+          fetch('/api/log', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ msg, src: 'ad' })
+          }).catch(function () {});
+        } catch (e) {}
+      }
       showToast(`已跳过广告 ${Math.round(e - s)} 秒`, 1800);
       return true;
     }
+
+    /* ---------- 广告调试面板（快捷键 D / 顶栏 🐞） ---------- */
+    let adDebugLastPaint = 0;
+
+    function adDebugOn() {
+      try { return localStorage.getItem('tvbox_addebug') === '1'; } catch (e) { return false; }
+    }
+
+    /** 广告区间用的时间格式：分:秒.1位小数，便于和播放器进度对齐 */
+    function fmtAd(t) {
+      const v = Math.max(0, Number(t) || 0);
+      const m = Math.floor(v / 60);
+      const s = v - m * 60;
+      return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
+    }
+
+    function toggleAdDebug(on) {
+      const next = on === undefined ? !adDebugOn() : !!on;
+      try { localStorage.setItem('tvbox_addebug', next ? '1' : '0'); } catch (e) {}
+      const panel = document.getElementById('adDebugPanel');
+      const btn = document.getElementById('btnAdDebug');
+      if (panel) panel.classList.toggle('show', next);
+      if (btn) btn.classList.toggle('on', next);
+      if (next) renderAdDebug(true);
+      if (next && !document.getElementById('playerView').classList.contains('active')) {
+        showToast('调试面板将在播放时显示广告区间', 2200);
+      }
+    }
+
+    function renderAdDebug(force) {
+      if (!adDebugOn()) return;
+      const now = Date.now();
+      if (!force && now - adDebugLastPaint < 500) return;
+      adDebugLastPaint = now;
+
+      const body = document.getElementById('adDebugBody');
+      const foot = document.getElementById('adDebugNow');
+      if (!body || !foot) return;
+
+      const d = window.__adDebug;
+      if (!d) {
+        body.textContent = '（尚未播放）';
+        foot.textContent = '--:--';
+        return;
+      }
+
+      const rows = (d.ranges || []).map((r, i) => {
+        const tail = r[3] === 1;
+        const to = tail ? '跳到结尾' : `跳到 ${fmtAd(r[2])}`;
+        return `<div class="ad-row${tail ? ' tail' : ''}">#${i + 1} ${fmtAd(r[0])} – ${fmtAd(r[1])} (${(r[1] - r[0]).toFixed(1)}s) → ${to}</div>`;
+      }).join('') || '<div class="ad-dim">未检测到广告区间</div>';
+
+      const chunkLine = (d.chunks || []).map((c, i) =>
+        `<span class="${c.ad ? 'ad-row' : 'ad-dim'}">${i}:${Number(c.d).toFixed(0)}s/${c.n}${c.ad ? '★' : ''}</span>`
+      ).join('  ') || '<span class="ad-dim">无分块信息（该源不走代理）</span>';
+
+      body.innerHTML =
+        `<div><span class="ad-dim">剧集 </span>${escapeHtml(d.title || '-')}</div>` +
+        `<div><span class="ad-dim">来源 </span>${d.proxy ? '本地代理' : '直连'}` +
+        `<span class="ad-dim">　片长 </span>${d.duration ? fmtAd(d.duration) : '--'}` +
+        `<span class="ad-dim">　分块 </span>${(d.chunks || []).length}</div>` +
+        rows +
+        `<div style="margin-top:6px"><span class="ad-dim">分块 </span>${chunkLine}</div>` +
+        `<div style="margin-top:6px" class="ad-dim">#n 开始–结束 (时长) → 目标；★ = 判定为广告</div>`;
+
+      const pos = isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0);
+      const idx = adRangeIndexAt(pos);
+      let state = '不在广告区间';
+      if (idx >= 0) {
+        const r = (window.__adRanges || [])[idx];
+        state = r ? `命中 #${idx + 1} → ${fmtAd(r[2])}` : '命中';
+      }
+      if (adSkipLocked >= 0) state += '（等待跳转生效）';
+      foot.textContent = `${fmtAd(pos)} · ${state}`;
+    }
+
+    function copyAdDebug() {
+      const d = window.__adDebug;
+      if (!d) { showToast('暂无数据，先播放一集', 2000); return; }
+      const lines = [
+        `剧集: ${d.title || '-'}`,
+        `媒体: ${d.url || '-'}`,
+        `代理: ${d.proxy ? '是' : '否'}  片长: ${fmtAd(d.duration)}  分块: ${(d.chunks || []).length}`
+      ];
+      (d.ranges || []).forEach((r, i) => {
+        lines.push(`#${i + 1} ${fmtAd(r[0])}–${fmtAd(r[1])} (${(r[1] - r[0]).toFixed(2)}s)${r[3] === 1 ? ' [片尾]' : ''} → ${fmtAd(r[2])}`);
+      });
+      lines.push('分块: ' + (d.chunks || []).map((c, i) => `${i}:${c.d}s/${c.n}${c.ad ? '*' : ''}`).join(' '));
+      const text = lines.join('\n');
+
+      const fallback = () => {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          showToast('已复制到剪贴板', 1600);
+        } catch (err) {
+          showToast('复制失败，请手动截图', 2000);
+        }
+      };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 1600)).catch(fallback);
+        } else fallback();
+      } catch (e) { fallback(); }
+    }
+
     function pickDirectLine() {
       if (!currentDetail || !currentDetail.playSources) return null;
       const cur = (currentDetail.playSources[currentSourceIdx] || {}).episodes || [];
@@ -3838,6 +4047,7 @@
       let adRanges = [];
       let adTotalDur = 0;
       let proxyOk = false;
+      let adRaw = null;
       const isHls = /\.m3u8/i.test(finalUrl);
       if (isHls && adFilterEnabled()) {
         try {
@@ -3846,6 +4056,7 @@
             playUrl = r.absoluteUrl;
             adTotalDur = Number(r.duration) || 0;
             adRanges = r.ranges;
+            adRaw = r;
             proxyOk = true;
           }
         } catch (e) {}
@@ -3858,6 +4069,7 @@
           if (r && Array.isArray(r.ranges)) {
             adTotalDur = Number(r.duration) || 0;
             adRanges = r.ranges;
+            adRaw = r;
           }
         } catch (e) {}
       }
@@ -3872,6 +4084,18 @@
       }
       window.__adRanges = adRanges;
       adSkipLocked = -1;   // 换集后重新允许跳过（区间下标是新的）
+
+      // 调试面板数据（D 键打开）：区间、分块结构、来源与片长
+      const dbgEps = ((currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx]) || {}).episodes || [];
+      window.__adDebug = {
+        title: `${(currentDetail && currentDetail.vod_name) || ''} ${((dbgEps[currentEpIdx] || {}).title) || ''}`.trim(),
+        url: finalUrl,
+        proxy: proxyOk,
+        duration: adTotalDur,
+        ranges: adRanges.slice(),
+        chunks: (adRaw && Array.isArray(adRaw.chunks)) ? adRaw.chunks : []
+      };
+      if (adDebugOn()) renderAdDebug(true);
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
       if (isMpv()) {
@@ -4468,6 +4692,7 @@
           : (compat.on ? compatPosition() : (pvVideo.currentTime || 0));
         if (maybeSkipAd(p0)) return;
       }
+      if (adDebugOn()) renderAdDebug();
       maybeAutoNext();
       saveHistory(false);
       if (osdEnabled()) renderOsd();
@@ -4622,6 +4847,11 @@
           // 信息层开关（类似 mpv 按 i）
           e.preventDefault();
           toggleOsd();
+          break;
+        case 'KeyD':
+          // 广告调试面板
+          e.preventDefault();
+          toggleAdDebug();
           break;
         case 'Escape':
           // 桌面版全屏：Esc 只退出全屏，绝不关闭播放页

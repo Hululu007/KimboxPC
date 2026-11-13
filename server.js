@@ -953,11 +953,13 @@ function analyzeAdRanges(text) {
   const adSigs = new Set(picked.map(p => sig(infos[p.idx])));
   const isAdShape = (x) => x.segs >= 1 && x.segs <= 30 && x.dur >= 5 && x.dur <= 90;
   const edgeRanges = [];
+  const adIdxAll = new Set(adIndices);   // 调试面板要用：把所有广告块（含首尾）标出来
 
   if (chunks.length >= 2 && adSigs.size > 0) {
     // 片头广告：第 0 块是短块，且紧随其后是长正片
     if (isAdShape(infos[0]) && adSigs.has(sig(infos[0])) && infos[1].dur >= Math.max(180, infos[0].dur * 3)) {
       edgeRanges.push([0, Math.round(infos[0].dur * 100) / 100, Math.round((infos[0].dur + 0.4) * 100) / 100]);
+      adIdxAll.add(0);
     }
     // 片尾广告：最后一块是短块，且之前是长正片
     const lastIdx = chunks.length - 1;
@@ -973,13 +975,22 @@ function analyzeAdRanges(text) {
         Math.round((start + infos[lastIdx].dur + 0.4) * 100) / 100,
         1
       ]);
+      adIdxAll.add(lastIdx);
     }
   }
 
   const allRanges = ranges.concat(edgeRanges).sort((a, b) => a[0] - b[0]);
 
+  // 供调试面板展示：每块的时长 / 分片数 / 是否判定为广告
+  const chunkList = infos.map((x, i) => ({
+    d: Math.round(x.dur * 100) / 100,
+    n: x.segs,
+    ad: adIdxAll.has(i) ? 1 : 0
+  }));
+
   return {
     ranges: allRanges,
+    chunks: chunkList,
     edgeAds: edgeRanges.length,
     totalChunks: chunks.length,
     duration: Math.round(totalDur),
@@ -1105,6 +1116,7 @@ app.get('/api/hls', async (req, res) => {
       path: pathPart,
       absoluteUrl: `${req.protocol}://${req.get('host')}${pathPart}`,
       ranges: analysis.ranges,
+      chunks: analysis.chunks || [],
       edgeAds: analysis.edgeAds || 0,
       duration: analysis.duration,
       totalChunks: analysis.totalChunks,
