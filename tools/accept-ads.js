@@ -23,17 +23,17 @@ const CmsEngine = require(path.join(ROOT, 'cmsEngine.js'));
 const API = process.env.ACCEPT_API || 'http://127.0.0.1:3980';
 const TITLE = process.argv[2] || '尚公主';
 const CONC = 2;              // 同时播几个
-const PRE = 6;               // 提前几秒起播
+const PRE = Number(process.env.ACCEPT_PRE || 6);   // 提前几秒起播（尾部卡顿的源可加大）
 const normName = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
   .replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】\-_]/g, '').toLowerCase();
 
 const fmt = (t) => { const v = Math.max(0, t); const m = Math.floor(v / 60); const s = v - m * 60; return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`; };
 
 /** 一次「起播 → 命中断言」验证。返回 { ok, reason, detail } */
-function runOne(proxyUrl, ranges, idx, duration) {
+function runOne(proxyUrl, ranges, idx, duration, pre = PRE, maxMs = 25000) {
   return new Promise((resolve) => {
     const r = ranges[idx];
-    const startAt = Math.max(0, r[0] - PRE);
+    const startAt = Math.max(0, r[0] - pre);
     const inst = native.create({ vo: 'null', ao: 'null', idle: 'yes', cache: 'yes', 'cache-secs': '30' });
     native.setProp(inst, 'start', String(startAt));
     native.command(inst, ['loadfile', proxyUrl, 'replace']);
@@ -83,10 +83,10 @@ function runOne(proxyUrl, ranges, idx, duration) {
         const expect = (r[3] === 1) ? (dur - 2) : (r[1] + 0.2);
         if (maxAfter >= expect) return done(true, '');
         if (idle) return done(false, dur > 0 && maxAfter >= dur - 3 ? '到达结尾' : '跳后进入 idle');
-        if (Date.now() - t0 > 20000) return done(false, `跳后位置未超过区间（${fmt(maxAfter)} < ${fmt(expect)}）`);
+        if (Date.now() - t0 > maxMs) return done(false, `跳后位置未超过区间（${fmt(maxAfter)} < ${fmt(expect)}）`);
       } else {
         if (idle) return done(false, '起播失败/提前结束');
-        if (Date.now() - t0 > 25000) return done(false, `未触发（当前位置 ${Number.isFinite(pos) ? fmt(pos) : '?'}，区间 ${fmt(r[0])}-${fmt(r[1])}）`);
+        if (Date.now() - t0 > maxMs) return done(false, `未触发（当前位置 ${Number.isFinite(pos) ? fmt(pos) : '?'}，区间 ${fmt(r[0])}-${fmt(r[1])}）`);
       }
     }, 500);
   });
@@ -167,7 +167,13 @@ async function pool(items, worker, limit) {
   // 4) 实播验证
   const results = await pool(tasks, async ({ j, idx }) => {
     const r = j.ranges[idx];
-    const res = await runOne(j.url, j.ranges, idx, j.duration);
+    let res = await runOne(j.url, j.ranges, idx, j.duration);
+    // 尾部区域直接 seek 进去可能不被源支持（会卡住）→ 改成提前 90 秒起播、一路播过去再跳
+    if (!res.ok && res.reason === '起播失败/提前结束') {
+      console.log(`  （${j.site} ${r[3] === 1 ? '片尾' : '#' + (idx + 1)}：直接跳转失败，改用 90 秒预播重试）`);
+      res = await runOne(j.url, j.ranges, idx, j.duration, 90, 150000);
+      res.retried = true;
+    }
     const kind = r[3] === 1 ? '片尾' : `#${idx + 1}`;
     console.log(`${res.ok ? 'PASS' : 'FAIL'}  ${j.site} / ${j.line} / ${j.ep} · ${kind} [${fmt(r[0])}-${fmt(r[1])}]`
       + (res.ok ? `  命中 ${fmt(res.hitAt || 0)} → ${fmt(res.target || 0)}` : `  ${res.reason}`));
@@ -194,5 +200,7 @@ async function pool(items, worker, limit) {
   console.log(`\n完成 ${new Date().toLocaleTimeString()}（明细 _accept.json）`);
   process.exit(0);
 })().catch(e => { console.error('FAILED', e); process.exit(1); });
+
+
 
 
