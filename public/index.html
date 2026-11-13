@@ -3730,9 +3730,13 @@
       let target = Number(ranges[i][2]);
       if (!(target > e + 0.1)) target = e + 0.4;
 
-      // 广告贴着片尾时直接跳到末尾会误触发「自动下一集」：这段就不跳了
+      // 片尾广告（服务端在区间第 4 项标了 1）：它后面没有正片，按时长累加算出的目标点会落到
+      // 已经错位的时间轴上（实测偏 39 秒，seek 直接被忽略、广告照播）。这类直接跳到
+      // 「片尾前 0.5 秒」，剩下 0.5 秒放完即 EOF，交给「播完自动下一集」。
       const dur = seekDuration();
-      if (dur > 0 && target > dur - 2) return false;
+      if (dur > 0) {
+        if (ranges[i][3] === 1 || target > dur - 1) target = Math.max(0, dur - 0.5);
+      }
 
       adSkipGuard = Date.now();
       adSkipLocked = i;

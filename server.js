@@ -945,8 +945,41 @@ function analyzeAdRanges(text) {
     return [Math.round(start * 100) / 100, Math.round(end * 100) / 100, Math.round(target * 100) / 100];
   });
 
+  // 片头 / 片尾广告：中间的插播块扫不到它们，但同一批广告素材的分片数与时长特征一致
+  // （实测「神马云」「猫眼」「魔都」「ikun」的片尾块与中间广告块完全相同：6 个分片 / 17.64 秒）。
+  // 只在**特征与已识别的插播广告完全一致**时才认定，避免把片尾字幕、下集预告当成广告切掉。
+  const sig = (x) => `${x.segs}:${Math.round(x.dur)}`;
+  const adSigs = new Set(picked.map(p => sig(infos[p.idx])));
+  const isAdShape = (x) => x.segs >= 1 && x.segs <= 30 && x.dur >= 5 && x.dur <= 90;
+  const edgeRanges = [];
+
+  if (chunks.length >= 2 && adSigs.size > 0) {
+    // 片头广告：第 0 块是短块，且紧随其后是长正片
+    if (isAdShape(infos[0]) && adSigs.has(sig(infos[0])) && infos[1].dur >= Math.max(180, infos[0].dur * 3)) {
+      edgeRanges.push([0, Math.round(infos[0].dur * 100) / 100, Math.round((infos[0].dur + 0.4) * 100) / 100]);
+    }
+    // 片尾广告：最后一块是短块，且之前是长正片
+    const lastIdx = chunks.length - 1;
+    if (isAdShape(infos[lastIdx]) && adSigs.has(sig(infos[lastIdx]))
+        && infos[lastIdx - 1].dur >= Math.max(180, infos[lastIdx].dur * 3)) {
+      const start = chunkPtsStarts[lastIdx];
+      // 第 4 项 = 1：标记「片尾广告」。它的目标点不能按时长累加算——
+      // 片尾广告之后没有正片，且此处显示时间轴与原始 PTS 已经错位（实测差 39 秒），
+      // 前端收到这个标记后直接 seek 到 duration - 0.5，让播完自动下一集接管。
+      edgeRanges.push([
+        Math.round(start * 100) / 100,
+        Math.round((start + infos[lastIdx].dur) * 100) / 100,
+        Math.round((start + infos[lastIdx].dur + 0.4) * 100) / 100,
+        1
+      ]);
+    }
+  }
+
+  const allRanges = ranges.concat(edgeRanges).sort((a, b) => a[0] - b[0]);
+
   return {
-    ranges,
+    ranges: allRanges,
+    edgeAds: edgeRanges.length,
     totalChunks: chunks.length,
     duration: Math.round(totalDur),
     mainDuration: Math.round(dramaAcc)
