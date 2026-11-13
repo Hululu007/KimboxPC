@@ -127,7 +127,9 @@ class CmsEngine {
     const playUrls = (raw.vod_play_url || '').split('$$$');
 
     const episodesGroup = [];
-    playFlags.forEach((flag, index) => {
+    const maxLen = Math.max(playFlags.length, playUrls.length);
+    for (let index = 0; index < maxLen; index++) {
+      const flag = (playFlags[index] || '').trim() || `线路 ${index + 1}`;
       const urlStr = playUrls[index] || '';
       const episodes = urlStr.split('#').filter(Boolean).map((part, epIdx) => {
         const trimmed = part.trim();
@@ -156,7 +158,7 @@ class CmsEngine {
           episodes: episodes
         });
       }
-    });
+    }
 
     item.content = raw.vod_content ? raw.vod_content.replace(/<[^>]+>/g, '') : '';
     item.director = raw.vod_director || '';

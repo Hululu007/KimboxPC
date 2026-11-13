@@ -59,13 +59,22 @@ class ConfigParser {
   }
 
   static formatConfig(obj, baseUrl) {
-    const sites = (obj.sites || []).map(site => {
+    const seenKeys = new Set();
+    const sites = (obj.sites || []).map((site, idx) => {
       if (!site || typeof site !== 'object') site = {};
+      const rawName = String(site.name || site.key || `站点 ${idx + 1}`).trim();
+      let rawKey = String(site.key || site.name || `site_${idx + 1}`).trim();
+      if (!rawKey) rawKey = `site_${idx + 1}`;
+      if (seenKeys.has(rawKey)) {
+        rawKey = `${rawKey}_${idx + 1}`;
+      }
+      seenKeys.add(rawKey);
+
       const apiStr = typeof site.api === 'string' ? site.api : '';
       const isDexSpider = site.type === 3 && (apiStr.startsWith('csp_') || !apiStr.endsWith('.js'));
       return {
-        key: site.key || site.name,
-        name: site.name || site.key,
+        key: rawKey,
+        name: rawName,
         type: typeof site.type === 'number' ? site.type : 0, // 0: xml/json cms, 1: json cms, 3: spider
         api: apiStr,
         ext: site.ext || '',

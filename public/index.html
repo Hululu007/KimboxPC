@@ -1495,12 +1495,12 @@
         try {
           const resp = await fetch('/api/sites');
           const data = await resp.json();
-          if (data && data.version && window.__sitesVersion && data.version !== window.__sitesVersion && Array.isArray(data.sites)) {
+          if (data && data.version !== undefined && window.__sitesVersion !== undefined && data.version !== window.__sitesVersion && Array.isArray(data.sites)) {
             const oldCount = (window.__siteList || []).length;
             const newCount = data.sites.length;
             window.__sitesVersion = data.version;
             window.__defaultSite = data.defaultSite || '';
-            renderSiteOptions(data.sites, activeSiteKey);
+            fillSiteSelect(data.sites, data.activeSite || activeSiteKey);
             refreshConfigList().catch(() => {});
             if (newCount !== oldCount) {
               showToast(`✨ 配置源已同步最新（共 ${newCount} 站）`, 2500);
@@ -1722,8 +1722,10 @@
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
         await refreshConfigList();
+        window.__sitesVersion = data.version || 0;
         fillSiteSelect(data.sites || [], data.activeSite);
         loadHome();
+        startConfigHotSync();
       } catch (e) {
         showStatus('添加失败: ' + e.message);
       }
@@ -1929,7 +1931,7 @@
 
             if (d.isCurrent && d.hasChanged) {
               window.__sitesVersion = d.version;
-              renderSiteOptions(d.sites, activeSiteKey);
+              fillSiteSelect(d.sites, d.activeSite || activeSiteKey);
             }
             await refreshConfigList();
 
@@ -2943,15 +2945,18 @@
 
     let pendingEpIdx = null;
     let pendingPos = null;
+    let allSourcesSeq = 0;
 
     async function loadAllSources(name, currentSiteKey) {
       const box = document.getElementById('mAllSources');
       if (!box) return;
+      const mySeq = ++allSourcesSeq;
       box.innerHTML = '<span class="src-loading">正在聚合各站点同片源…（首次约 10 秒）</span>';
 
       try {
         const resp = await fetch(`/api/sources?name=${encodeURIComponent(name)}`);
         const data = await resp.json();
+        if (mySeq !== allSourcesSeq || !currentDetail || currentDetail.vod_name !== name) return;
         const list = data.list || [];
         box.innerHTML = '';
 
@@ -3279,7 +3284,7 @@
         tab.textContent = src.sourceName;
         tab.onclick = () => {
           const keepPos = currentAbsPos();
-          document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
+          container.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
           tab.classList.add('active');
           currentSourceIdx = idx;
           renderEpisodes(true, keepPos);
@@ -3773,7 +3778,7 @@
             showToast(`当前线路无法解析，已自动切换到「${alt.name}」线路`, 3500);
             currentSourceIdx = alt.idx;
             currentEpIdx = epIdx;
-            document.querySelectorAll('.source-tab').forEach((el, i) => el.classList.toggle('active', i === alt.idx));
+            document.querySelectorAll('#mSourceTabs .source-tab').forEach((el, i) => el.classList.toggle('active', i === alt.idx));
             renderEpisodes(false);
             return;
           }

@@ -160,6 +160,8 @@ const HistoryRepo = {
 const ShowMarkRepo = {
   key(name) {
     return String(name || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
       .replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】\-—_]/g, '')
       .toLowerCase();
   },

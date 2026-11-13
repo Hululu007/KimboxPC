@@ -39,6 +39,12 @@ function writePid() {
 }
 function clearPid() {
   try { if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE); } catch (e) {}
+  if (typeof remuxSessions !== 'undefined' && remuxSessions && remuxSessions.size > 0) {
+    for (const p of remuxSessions) {
+      try { p.kill('SIGKILL'); } catch (e) {}
+    }
+    remuxSessions.clear();
+  }
 }
 process.on('exit', clearPid);
 process.on('SIGINT', () => { clearPid(); process.exit(0); });
@@ -142,8 +148,10 @@ async function applyConfig(row) {
         const hasChanged = oldFingerprint !== newFingerprint;
 
         state.sites = parsed.sites;
+        const currentKey = state.activeSite ? state.activeSite.key : null;
+        const stillActive = currentKey ? state.sites.find(s => s.key === currentKey) : null;
         const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
-        state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+        state.activeSite = stillActive || preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
         saveConfigCache(row.id, parsed);
         state.loadError = null;
 
@@ -220,6 +228,7 @@ app.post('/api/configs', async (req, res) => {
       try { name = new URL(url).hostname; } catch (e) { name = url.slice(0, 30); }
     }
     const row = ConfigRepo.add(url, name);   // 数量改为前端按实时值渲染
+    saveConfigCache(row.id, parsed);
     await applyConfig(row);
     res.json({
       success: true,
@@ -227,7 +236,8 @@ app.post('/api/configs', async (req, res) => {
       current: { id: row.id, url: row.url },
       siteCount: state.sites.length,
       sites: state.sites.map(publicSite),
-      activeSite: state.activeSite ? state.activeSite.key : null
+      activeSite: state.activeSite ? state.activeSite.key : null,
+      version: state.sitesVersion || 0
     });
   } catch (e) {
     res.status(500).json({ error: '配置加载失败: ' + e.message });
@@ -307,8 +317,10 @@ app.post('/api/configs/:id/sync', async (req, res) => {
     const isCurrent = (state.configId === id);
     if (isCurrent && hasChanged) {
       state.sites = parsed.sites;
+      const currentKey = state.activeSite ? state.activeSite.key : null;
+      const stillActive = currentKey ? state.sites.find(s => s.key === currentKey) : null;
       const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
-      state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+      state.activeSite = stillActive || preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
       state.loadError = null;
       state.sitesVersion = Date.now();
     }
@@ -339,12 +351,14 @@ app.post('/api/config/load', async (req, res) => {
     let name = '';
     try { name = new URL(url).hostname; } catch (e) { name = url.slice(0, 30); }
     const row = ConfigRepo.add(url, name);   // 同上，不再写死数量
+    saveConfigCache(row.id, parsed);
     await applyConfig(row);
     res.json({
       success: true,
       siteCount: state.sites.length,
       sites: state.sites.map(publicSite),
-      activeSite: state.activeSite ? state.activeSite.key : null
+      activeSite: state.activeSite ? state.activeSite.key : null,
+      version: state.sitesVersion || 0
     });
   } catch (e) {
     res.status(500).json({ error: '配置加载失败: ' + e.message });
