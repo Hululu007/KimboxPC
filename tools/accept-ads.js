@@ -168,11 +168,14 @@ async function pool(items, worker, limit) {
   const results = await pool(tasks, async ({ j, idx }) => {
     const r = j.ranges[idx];
     let res = await runOne(j.url, j.ranges, idx, j.duration);
-    // 尾部区域直接 seek 进去可能不被源支持（会卡住）→ 改成提前 90 秒起播、一路播过去再跳
-    if (!res.ok && res.reason === '起播失败/提前结束') {
+    // 直接 seek 到广告点附近，个别源会卡住（源的分片/尾部区域不支持随机访问）→
+    // 改成提前 90 秒起播、一路播过去再跳，区分「逻辑问题」与「源不支持 seek」
+    if (!res.ok) {
       console.log(`  （${j.site} ${r[3] === 1 ? '片尾' : '#' + (idx + 1)}：直接跳转失败，改用 90 秒预播重试）`);
-      res = await runOne(j.url, j.ranges, idx, j.duration, 90, 150000);
-      res.retried = true;
+      const retry = await runOne(j.url, j.ranges, idx, j.duration, 90, 150000);
+      retry.retried = true;
+      retry.firstReason = res.reason;
+      res = retry.ok ? retry : { ...retry, reason: `预播重试仍失败：${retry.reason}` };
     }
     const kind = r[3] === 1 ? '片尾' : `#${idx + 1}`;
     console.log(`${res.ok ? 'PASS' : 'FAIL'}  ${j.site} / ${j.line} / ${j.ep} · ${kind} [${fmt(r[0])}-${fmt(r[1])}]`
@@ -200,6 +203,7 @@ async function pool(items, worker, limit) {
   console.log(`\n完成 ${new Date().toLocaleTimeString()}（明细 _accept.json）`);
   process.exit(0);
 })().catch(e => { console.error('FAILED', e); process.exit(1); });
+
 
 
 
