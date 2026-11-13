@@ -3873,9 +3873,10 @@
 
     /** 广告区间用的时间格式：分:秒.1位小数，便于和播放器进度对齐 */
     function fmtAd(t) {
-      const v = Math.max(0, Number(t) || 0);
-      const m = Math.floor(v / 60);
-      const s = v - m * 60;
+      // 先按 0.1 秒取整再拆分，避免 299.96 被格式化成「4:60.0」
+      const total = Math.round(Math.max(0, Number(t) || 0) * 10) / 10;
+      const m = Math.floor(total / 60);
+      const s = total - m * 60;
       return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`;
     }
 
