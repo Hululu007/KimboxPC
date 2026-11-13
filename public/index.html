@@ -3813,6 +3813,22 @@
       return -1;
     }
 
+    /** 某段广告的跳转目标：默认取区间第 3 项；若它又落进另一段广告，顺延到最后一串的末尾 */
+    function adTargetFor(ranges, i) {
+      const r = ranges[i];
+      let target = Number(r[2]);
+      if (!(target > r[1] + 0.1)) target = r[1] + 0.4;
+      for (let hop = 0; hop < 4; hop++) {
+        const nextIdx = ranges.findIndex((x, j) => j !== i && target >= x[0] - 0.5 && target < x[1] - 0.2);
+        if (nextIdx < 0) break;
+        let t2 = Number(ranges[nextIdx][2]);
+        if (!(t2 > ranges[nextIdx][1] + 0.1)) t2 = ranges[nextIdx][1] + 0.4;
+        if (!(t2 > target)) break;
+        target = t2;
+      }
+      return target;
+    }
+
     function maybeSkipAd(pos) {
       const ranges = window.__adRanges;
       if (!ranges || !ranges.length || !(pos > 0)) return false;
@@ -3830,9 +3846,9 @@
 
       const s = ranges[i][0], e = ranges[i][1];
 
-      // 目标点必须落在广告区间之外，否则 seek 回来仍在广告里 → 死循环
-      let target = Number(ranges[i][2]);
-      if (!(target > e + 0.1)) target = e + 0.4;
+      // 目标点必须落在广告区间之外，否则 seek 回来仍在广告里 → 死循环；
+      // 若目标又落进下一段广告，则顺延到最后一串区间的末尾（兼容模式只需重启一次转封装）
+      let target = adTargetFor(ranges, i);
 
       // 片尾广告（服务端在区间第 4 项标了 1）：它后面没有正片，按时长累加算出的目标点会落到
       // 已经错位的时间轴上（实测偏 39 秒，seek 直接被忽略、广告照播）。这类直接跳到
@@ -3840,6 +3856,15 @@
       const dur = seekDuration();
       if (dur > 0) {
         if (ranges[i][3] === 1 || target > dur - 1) target = Math.max(0, dur - 0.5);
+      }
+
+      // 兼容模式的片尾广告：重启 ffmpeg 到片尾要等十几秒，等于白等，直接进下一集
+      if (ranges[i][3] === 1 && compat.on) {
+        adSkipGuard = Date.now();
+        adSkipLocked = i;
+        showToast('已跳过片尾广告', 1800);
+        playNextEpisode();
+        return true;
       }
 
       adSkipGuard = Date.now();
@@ -4116,6 +4141,19 @@
       }
       window.__adRanges = adRanges;
       adSkipLocked = -1;   // 换集后重新允许跳过（区间下标是新的）
+
+      // 起播点若正好落在广告区间里（续播进度、片头标记落在广告中），先把它推到区间之后：
+      // 否则开播一秒就要跳一次，兼容模式还得为此重启一次转封装。
+      if (adRanges.length && resumeAt > 0) {
+        for (const r of adRanges) {
+          // 片尾段不在这里处理：落到片尾广告里直接开播即可（mpv 跳结尾 / 兼容模式进下一集）
+          if (r[3] === 1) continue;
+          if (resumeAt >= r[0] - 1.2 && resumeAt < r[1]) {
+            resumeAt = Number(r[2]) || (r[1] + 0.4);
+            break;
+          }
+        }
+      }
 
       // 调试面板数据（D 键打开）：区间、分块结构、来源与片长
       const dbgEps = ((currentDetail && currentDetail.playSources && currentDetail.playSources[currentSourceIdx]) || {}).episodes || [];
