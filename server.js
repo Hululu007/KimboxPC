@@ -488,18 +488,15 @@ app.get('/api/detail', async (req, res) => {
   if (!req.query.id) return res.status(400).json({ error: '缺少 id 参数' });
   if (!requireSite(res)) return;
   try {
-    // 必须先切到影片所属站点，再查详情；否则会用 id 去错误的站点查
+    // 按请求里的站点查详情（换成另一站点的同片源时会带 siteKey），
+    // **但不改全局 state.activeSite**：以前这里会顺手切站点，导致「播放时换源 → 回首页」
+    // 后首页仍用旧站点的分类 tid 去查新站点，分类列表现为「共 0 部」、标签与内容错位。
+    // 当前站点只由 /api/site/select 显式修改。
     const siteKey = req.query.siteKey || state.activeSite.key;
-    if (siteKey !== state.activeSite.key) {
-      const target = state.sites.find(s => s.key === siteKey);
-      if (target) {
-        state.activeSite = target;
-      } else {
-        return res.status(404).json({ error: '该影片所属站点不存在: ' + siteKey });
-      }
-    }
+    const target = state.sites.find(s => s.key === siteKey);
+    if (!target) return res.status(404).json({ error: '该影片所属站点不存在: ' + siteKey });
 
-    const detail = await CmsEngine.getDetail(state.activeSite, req.query.id);
+    const detail = await CmsEngine.getDetail(target, req.query.id);
     if (!detail) return res.json(null);
 
     // 附带该片在本机的播放历史，用于续播

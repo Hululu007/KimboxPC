@@ -2200,13 +2200,16 @@
     async function loadHome() {
       hideToolbar();
       listState = { mode: 'category', kind: null, tid: '', page: 1, pagecount: 1, loading: true, total: 0 };
+      const siteAtStart = activeSiteKey;
       showStatus('正在获取视频列表...');
       try {
         const resp = await fetch('/api/home');
         const data = await resp.json();
+        if (siteAtStart !== activeSiteKey) return;   // 请求期间切了站点，结果作废
         listState.loading = false;
         listState.pagecount = data.pagecount || 1;
         listState.total = data.total || (data.list || []).length;
+        window.__homeSiteKey = siteAtStart;          // 记录这份列表属于哪个站点
         renderCategories(data.classes || []);
         renderVideos(data.list || [], false);
         updateFooter();
@@ -2323,10 +2326,12 @@
       if (!tid) return loadHome();
 
       listState = { mode: 'category', kind: null, tid, page: 1, pagecount: 1, loading: true, total: 0 };
+      const siteAtStart = activeSiteKey;
       showStatus('加载分类中...');
       try {
         const resp = await fetch(`/api/category?tid=${tid}&pg=1`);
         const data = await resp.json();
+        if (siteAtStart !== activeSiteKey) return;   // 请求期间切了站点，丢弃结果
         listState.pagecount = data.pagecount || 1;
         listState.total = data.total || (data.list || []).length;
         listState.loading = false;
@@ -3259,10 +3264,22 @@
         // 片头/片尾标记按片名读取（必须等 currentDetail 赋值后再取）
         await loadShowMark();
         if (detail.siteKey) {
+          const changed = detail.siteKey !== activeSiteKey;
           activeSiteKey = detail.siteKey;
           const sel = document.getElementById('siteSelect');
           if (sel && [...sel.options].some(o => o.value === detail.siteKey)) {
             sel.value = detail.siteKey;
+          }
+          // 这里只是「看详情/换源」，以前服务端会顺手把全局当前站点切走。
+          // 现在改为显式切换：让服务端与界面保持一致，回到首页时也知道该按哪个站点重建列表。
+          if (changed) {
+            try {
+              await fetch('/api/site/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ siteKey: detail.siteKey })
+              });
+            } catch (e) {}
           }
         }
 
@@ -4321,6 +4338,13 @@
       hidePlayOverlay();
       hideBars();
       updateVolumeUI();
+      // 播放中换过源（当前站点已变）：回首页时按新站点重建分类与列表，
+      // 否则会拿旧站点的分类 tid 去查新站点 → 「共 0 部」「暂无相关影片」。
+      // 只在首页/分类视图下重建；收藏、历史这类静态列表不受站点影响，不要打扰。
+      if (listState && listState.mode === 'category'
+          && window.__homeSiteKey && activeSiteKey && window.__homeSiteKey !== activeSiteKey) {
+        loadHome();
+      }
       if (nativeFullscreen && isNativeShell()) { try { window.kimbox.setFullscreen(false); } catch (e) {} nativeFullscreen = false; document.getElementById('playerView').classList.remove('native-fs'); }
     }
 
