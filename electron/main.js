@@ -682,6 +682,7 @@ ipcMain.handle('mpv:cmd', (evt, { name, args }) => {
       // seek 之后 mpv 报告的是绝对时间，偏移量清零，并给 5 秒豁免期避免误判为"时间轴重置"
       timeOffset = 0;
       selfSeekUntil = Date.now() + 5000;
+      lastRawPos = Number(args[0]) || 0;
       native.command(inst, ['seek', String(args[0]), args[1] || 'absolute']);
     } else if (name === 'cycle') {
       native.command(inst, ['cycle', String(args[0])]);
@@ -703,18 +704,54 @@ ipcMain.handle('mpv:state', () => {
   const dur = Number(p('duration') || 0);
   if (dur > 0) lastKnownDuration = dur;
 
-  const rawPos = Number(p('time-pos') || 0);
-  // 检测「时间轴重置」：位置突然大幅后退，且不是我们自己 seek 造成的
-  if (rawPos < lastRawPos - 15 && Date.now() > selfSeekUntil) {
-    // 把之前累计的绝对值接上：offset = 上一刻的绝对位置 - 新报告的原始位置
-    timeOffset = (lastRawPos + timeOffset) - rawPos;
-    console.log('[mpv] 检测到时间轴重置，偏移量设置为', Math.round(timeOffset));
-  }
-  lastRawPos = rawPos;
-  const posNow = rawPos + timeOffset;   // 换算成绝对时间
-  if (posNow > lastKnownPosition) lastKnownPosition = posNow;
+  const rawPosVal = p('time-pos');
   const idleNow = p('idle-active') === 'yes' || p('idle-active') === true || p('idle-active') === 1;
   const eofNow = (() => { const v = p('eof-reached'); return v === 'yes' || v === 'true' || v === 1 || v === true; })();
+
+  // 缓冲中或加载分片时，mpv 的 time-pos 可能短暂为 null，保持上一有效状态，避免误判跳变
+  if (rawPosVal === null || rawPosVal === undefined || !isFinite(Number(rawPosVal))) {
+    const nearEnd = lastKnownDuration > 0 && lastKnownPosition >= lastKnownDuration - 30;
+    const ended = (eofNow || idleNow) && playbackStarted && nearEnd;
+    return {
+      running: true,
+      connected: true,
+      position: lastKnownPosition,
+      rawPosition: lastRawPos,
+      duration: lastKnownDuration,
+      paused: (() => { const v = p('pause'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
+      volume: Number(p('volume') || 0),
+      muted: (() => { const v = p('mute'); return v === 'yes' || v === 'true' || v === 1 || v === true; })(),
+      eof: eofNow,
+      lastPosition: Math.round(lastKnownPosition),
+      ended,
+      idle: idleNow,
+      fps: frameCount,
+      title: p('media-title') || '',
+      width: Number(p('width') || 0),
+      height: Number(p('height') || 0),
+      videoBitrate: Number(p('video-bitrate') || 0),
+      cacheSpeed: Number(p('cache-speed') || 0),
+      speed: Number(p('speed') || 1),
+      cacheSecs: Number(p('cache-secs') || 0),
+      cacheDuration: Number(p('demuxer-cache-duration') || 0)
+    };
+  }
+
+  const rawPos = Number(rawPosVal);
+  // 检测「时间轴跳变」：位置大幅后退或前进（例如跨过广告/不连续分片），且不是我们自己 seek 造成的
+  if (Math.abs(rawPos - lastRawPos) > 15 && lastRawPos > 0 && Date.now() > selfSeekUntil) {
+    // 把之前累计的绝对值接上：offset = 上一刻的绝对位置 - 新报告的原始位置
+    const lastAbs = lastRawPos + timeOffset;
+    timeOffset = lastAbs - rawPos;
+    console.log('[mpv] 检测到时间轴跳变，更新偏移量为', Math.round(timeOffset));
+  }
+  lastRawPos = rawPos;
+  let posNow = Math.max(0, rawPos + timeOffset);   // 换算成绝对时间
+  if (lastKnownDuration > 0 && posNow > lastKnownDuration && !eofNow) {
+    posNow = lastKnownDuration;
+  }
+  if (posNow > lastKnownPosition) lastKnownPosition = posNow;
+
   // 播完后 mpv 会卸载当前文件回到 idle，此时 eof-reached 已复位，只能靠「曾经播过且现在 idle」判断。
   // 但中途出现流中断/插播广告也会让 mpv 短暂 idle 或 EOF —— 必须再要求「位置确实已到结尾附近」，
   // 否则会在第 8 分钟被误判成播完而跳到下一集（表现为进度跳回 0）。

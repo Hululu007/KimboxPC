@@ -3389,13 +3389,14 @@
       const p = currentAbsPos();
       // 片尾标记：到达「总时长 - 片尾」即视为本集结束
       if (d > 0 && showMark.outro > 1 && p >= d - showMark.outro) return true;
-      if (isMpv()) return sawProgress && !!(mpvState.ended || (d > 0 && p >= d - 1.5));
+      if (isMpv()) return sawProgress && !!(mpvState.ended || ((mpvState.eof || mpvState.idle) && d > 0 && p >= d - 10));
       if (!(d > 0)) return false;
       return p >= d - 1.5;
     }
 
     /** 播完自动切下一集 */
     function maybeAutoNext() {
+      if (!autoNextEnabled()) return;
       if (Date.now() < autoNextGuardUntil) return;          // 冷却期内不重复切集
       if (!document.getElementById('playerView').classList.contains('active')) return;
       if (!isPlaybackEnded()) return;
@@ -3702,7 +3703,7 @@
 
       for (let i = 0; i < ranges.length; i++) {
         const s = ranges[i][0], e = ranges[i][1];
-        if (pos >= s - 0.8 && pos < e - 0.3) {
+        if (pos >= s - 1.2 && pos < e - 0.2) {
           adSkipGuard = Date.now();
           const target = e + 0.4;
           try {
@@ -4405,17 +4406,17 @@
     );
 
     function updateControls() {
-      maybeAutoNext();
-      saveHistory(false);
-      if (osdEnabled()) renderOsd();
       // 播到广告区间就跳过去（区间由 /api/ads 预先给出，列表本身没被改动）
-      // 已判定"到片尾"时不再跳广告，避免两个机制互相打架
+      // 跳广告优先判定，避免在跳过瞬间误触发自动切集；已判定"到片尾"时不再跳广告
       if (!eofHandled) {
         const p0 = isMpv()
           ? (mpvState.position || 0)
           : (compat.on ? compatPosition() : (pvVideo.currentTime || 0));
         if (maybeSkipAd(p0)) return;
       }
+      maybeAutoNext();
+      saveHistory(false);
+      if (osdEnabled()) renderOsd();
 
       if (isMpv()) {
         const dur = mpvState.duration || 0;
