@@ -3836,6 +3836,20 @@
           pvVideo.currentTime = target;
         }
       } catch (err) {}
+      // 片尾广告：个别源不支持「跳到文件末尾」的 seek，会卡在原地不动（实测 TV-猫眼《太平年》）。
+      // 8 秒内位置没有往前走，就当作本集已播完，直接进下一集（暂停中则不动，避免误切）。
+      if (ranges[i][3] === 1) {
+        const from = pos;
+        setTimeout(() => {
+          try {
+            if (!document.getElementById('playerView').classList.contains('active')) return;
+            const paused = isMpv() ? mpvState.paused : pvVideo.paused;
+            if (paused) return;
+            const cur = isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0);
+            if (cur < from + 1) playNextEpisode();
+          } catch (e) {}
+        }, 8000);
+      }
       if (adDebugOn()) {
         const msg = `[ad] 跳过 #${i + 1} 区间 ${fmtAd(s)}–${fmtAd(e)} 位置 ${fmtAd(pos)} → ${fmtAd(target)}${ranges[i][3] === 1 ? '（片尾）' : ''}`;
         try { console.log(msg); } catch (e) {}
