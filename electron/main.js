@@ -565,12 +565,27 @@ function stopRenderLoop() {
   }
 }
 
+/** mpv 生命周期写进日志：偶发原生崩溃时可回溯到具体是哪一步 */
+function mpvLog(msg) {
+  try {
+    const f = path.join(ROOT, 'data', 'app.log');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, `[${new Date().toISOString()}] [mpv] ${msg}\n`, 'utf8');
+  } catch (e) {}
+}
+
 function stopPlayback() {
   stopRenderLoop();
-  if (inst && native) {
-    try { native.destroy(inst); } catch (e) {}
-    inst = null;
-  }
+  if (!inst || !native) return;
+  const old = inst;
+  inst = null;              // 先断开引用，避免渲染循环/状态查询再摸到它
+  // 先暂停并 stop，给 mpv 的网络/解码线程一点时间收尾，再销毁实例：
+  // 在 HLS 还在拉流时直接 destroy 偶发原生崩溃（crashpad 有记录，退出码 0xFFFF7003）。
+  try { native.setProp(old, 'pause', true); } catch (e) {}
+  try { native.command(old, ['stop']); } catch (e) {}
+  setTimeout(() => {
+    try { native.destroy(old); mpvLog('destroy'); } catch (e) {}
+  }, 150);
 }
 
 function ensureInstance(opts) {
@@ -586,6 +601,7 @@ function ensureInstance(opts) {
   });
   // 渲染上下文必须在 loadfile 之前创建
   native.initRender(inst, renderW, renderH);
+  mpvLog(`create ${renderW}x${renderH}`);
   return inst;
 }
 
@@ -632,8 +648,13 @@ ipcMain.handle('mpv:open', (evt, payload) => {
     if (width && height) {
       renderW = Math.max(320, Math.min(1920, Math.round(width)));
       renderH = Math.max(180, Math.min(1080, Math.round(height)));
-      // 尺寸变化需要重建渲染上下文
-      if (inst) { stopPlayback(); }
+      // 尺寸变了不再销毁重建实例（重建 mpv 是崩溃高发点），复用实例换渲染缓冲即可
+      if (inst && native) {
+        try {
+          if (native.resize) native.resize(inst, renderW, renderH);
+          else native.initRender(inst, renderW, renderH);
+        } catch (e) {}
+      }
     }
 
     const i = ensureInstance();
