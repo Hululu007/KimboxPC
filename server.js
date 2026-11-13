@@ -922,8 +922,13 @@ function analyzeAdRanges(text) {
   const adIndices = new Set(picked.map(p => p.idx));
 
   // 正片分片在源视频中是连续编码的（PTS 从 0 连续递增，不含插播广告时长）。
-  // 因此广告在播放器时间轴（PTS）上的实际插入点 = 该广告前面所有正片块的时长总和。
-  // 跳过广告后的目标点 = 紧接该广告的下一个正片块开头（即插入点 + 0.8 秒微调）。
+  // 因此广告在播放器时间轴上的实际插入点 = 该广告前面所有正片块的时长总和。
+  //
+  // ⚠️ 目标点（数组第 3 项）必须落在广告块 **之后**，也就是 end 再往后一点点：
+  //   - 广告块在时间轴上占满 [start, start+dur]，end 即「下一段正片第一帧」；
+  //   - 若把目标点算成 start + 0.8（老写法），seek 回来位置仍在 [start, end) 内，
+  //     下一次轮询又满足跳过条件 → 反复 seek 同一处，界面无限弹「已跳过广告」。
+  //   - 目标点也不能越过片尾，前端会按实际 duration 再兜底一次。
   let dramaAcc = 0;
   const chunkPtsStarts = [];
   for (let i = 0; i < chunks.length; i++) {
@@ -936,7 +941,7 @@ function analyzeAdRanges(text) {
   const ranges = picked.map(p => {
     const start = chunkPtsStarts[p.idx];
     const end = start + p.dur;
-    const target = start + 0.8;
+    const target = end + 0.4;
     return [Math.round(start * 100) / 100, Math.round(end * 100) / 100, Math.round(target * 100) / 100];
   });
 

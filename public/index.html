@@ -3695,31 +3695,58 @@
     /* ---------- 播放中跳过广告 ---------- */
     // 由 /api/ads 预先给出区间，播到区间内就跳到末尾。不改列表，时间轴不变。
     let adSkipGuard = 0;
+    // 正在跳过的那一段广告（ranges 下标）。跳走后位置必须真的离开该区间才解锁，
+    // 否则 seek 目标算错 / seek 没生效时，下一轮轮询又会命中同一段，
+    // 变成每 2 秒 seek 一次、无限弹「已跳过广告」的死循环。
+    let adSkipLocked = -1;
+
+    function adRangeIndexAt(pos) {
+      const ranges = window.__adRanges;
+      if (!ranges || !ranges.length) return -1;
+      for (let i = 0; i < ranges.length; i++) {
+        if (pos >= ranges[i][0] - 1.2 && pos < ranges[i][1] - 0.2) return i;
+      }
+      return -1;
+    }
 
     function maybeSkipAd(pos) {
       const ranges = window.__adRanges;
       if (!ranges || !ranges.length || !(pos > 0)) return false;
       if (Date.now() - adSkipGuard < 1200) return false;
 
-      for (let i = 0; i < ranges.length; i++) {
-        const s = ranges[i][0], e = ranges[i][1];
-        if (pos >= s - 1.2 && pos < e - 0.2) {
-          adSkipGuard = Date.now();
-          const target = ranges[i][2] !== undefined ? ranges[i][2] : (e + 0.4);
-          try {
-            if (isMpv()) {
-              mpvCmd('seek', [target, 'absolute']);
-            } else if (compat.on) {
-              compatSeek(target);
-            } else if (pvVideo) {
-              pvVideo.currentTime = target;
-            }
-          } catch (err) {}
-          showToast(`已跳过广告 ${Math.round(e - s)} 秒`, 1800);
-          return true;
-        }
+      // 上一段还没跳出去：安静等待，不重复 seek、不重复提示
+      if (adSkipLocked >= 0) {
+        const locked = ranges[adSkipLocked];
+        if (!locked || pos >= locked[1] - 0.2 || pos < locked[0] - 2) adSkipLocked = -1;
+        else return false;
       }
-      return false;
+
+      const i = adRangeIndexAt(pos);
+      if (i < 0) return false;
+
+      const s = ranges[i][0], e = ranges[i][1];
+
+      // 目标点必须落在广告区间之外，否则 seek 回来仍在广告里 → 死循环
+      let target = Number(ranges[i][2]);
+      if (!(target > e + 0.1)) target = e + 0.4;
+
+      // 广告贴着片尾时直接跳到末尾会误触发「自动下一集」：这段就不跳了
+      const dur = seekDuration();
+      if (dur > 0 && target > dur - 2) return false;
+
+      adSkipGuard = Date.now();
+      adSkipLocked = i;
+      try {
+        if (isMpv()) {
+          mpvCmd('seek', [target, 'absolute']);
+        } else if (compat.on) {
+          compatSeek(target);
+        } else if (pvVideo) {
+          pvVideo.currentTime = target;
+        }
+      } catch (err) {}
+      showToast(`已跳过广告 ${Math.round(e - s)} 秒`, 1800);
+      return true;
     }
     function pickDirectLine() {
       if (!currentDetail || !currentDetail.playSources) return null;
@@ -3818,6 +3845,7 @@
         } catch (e) {}
       }
       window.__adRanges = adRanges;
+      adSkipLocked = -1;   // 换集后重新允许跳过（区间下标是新的）
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
       if (isMpv()) {
