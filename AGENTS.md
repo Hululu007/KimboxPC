@@ -44,6 +44,7 @@ KimBoxPC-桌面版.bat
 - **前端没有任何打包步骤**：`public/index.html` 是手写单文件，CSS 与 JS 都内联在 `<script>` 里，配 `public/vendor/hls.min.js`、`public/vendor/mpegts.js`。改完刷新窗口即可，不需要 build。
 - **播放链路**：libmpv（`MPV_RENDER_API_TYPE_SW`）→ 内存帧 → IPC `mpv:frame` → `<canvas>`；音频由 mpv 直连声卡，**不经过浏览器 MSE**。约 30fps（33ms 间隔）推帧。
 - **双内核**：默认 `mpv` 内核；`ffmpeg (兼容)` 内核走 `/api/remux`（`ffmpeg -c copy` 转 MPEG-TS 直出给 hls/mpegts.js），用来规避 HLS `DISCONTINUITY` 时间戳重置导致的音频变调。
+- **播放列表代理**（`/api/hls`）：开启广告拦截时，前端不再把 CDN 地址直接交给播放器，而是让本地服务拉一次 m3u8、把分片与 `URI="..."` 改写成绝对地址后缓存，再用 `/api/hls/<token>.m3u8` 喂给播放器 —— 这样「分析用的列表」和「播放用的列表」是同一份字节。原因：部分 CDN 每次请求插播的广告位置都不同（实测同一地址连拉 4 次得到 4 组时长序列），先分析后播放会错位。代理失败才退回直连 + `/api/ads`。
 - **运行状态是模块级单例**：`server.js` 顶部的 `state`（configId / url / sites / activeSite / sitesVersion）。单进程单用户假设贯穿全局，不要引入需要多实例并发的写法。
 
 ### 数据落盘
