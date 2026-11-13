@@ -67,7 +67,7 @@ data/                     全目录被 .gitignore，是用户真实数据
 
 - **配置源 0ms 秒开 + 热同步**（`server.js` `applyConfig()`）：先用 `data/cache/config_<id>.json` 立刻填充 `state.sites`，再后台拉远程；指纹（`key:api:name` 拼接）变化才 `state.sitesVersion = Date.now()`。`/api/configs/:id/sync` 是强制同步。切换站点时**优先保持当前活跃站点**（`stillActive`），不要退回第一站。
 - **跨站聚合搜索**（`/api/search/all`、`/api/sources`）：固定并发（8 / 6）+ 单站 9s 超时，片名用 `normName()`（去零宽字符、控制字符、标点、小写）后合并同名，保留首个并按来源数排序。前端用自增序列号丢弃过期响应。
-- **广告跳过**（`server.js analyzeAdRanges()` + 前端 `maybeSkipAd()`）：不改播放列表，只算区间。把 m3u8 按 `#EXT-X-DISCONTINUITY` 切块，挑「夹在两侧长正片之间、5~90 秒、1~30 片」的短块；命中数 >6 或广告总时长 >5% 就整体放弃（更可能是整集切片）。区间按**正片 PTS 累计**（广告段不计入）计算，返回 `[start, end, target]`，**`target` 必须是 `end + 0.4`（广告块之后），绝不能落在 `[start, end)` 内**——否则 seek 回来还在广告里，每轮轮询都重新命中，界面会无限弹「已跳过广告」。前端另有单段锁 `adSkipLocked` 与 `target > duration - 2` 兜底。**这个 PTS 假设是整个算法的地基**，改切块或计时逻辑前先想清楚时间轴。
+- **广告跳过**（`server.js analyzeAdRanges()` + 前端 `maybeSkipAd()`）：不改播放列表，只算区间。把 m3u8 按 `#EXT-X-DISCONTINUITY` 切块，挑「夹在两侧长正片之间、5~90 秒、1~30 片」的短块；命中数 >6 或广告总时长 >5% 就整体放弃（更可能是整集切片）。区间按**正片 PTS 累计**（广告段不计入）计算，返回 `[start, end, target]`，**`target` 必须是 `end + 0.4`（广告块之后），绝不能落在 `[start, end)` 内**——否则 seek 回来还在广告里，每轮轮询都重新命中，界面会无限弹「已跳过广告」。首尾块另按「与已识别广告相同的分片数 + 时长」特征匹配，仅当特征一致才认定（避免误切片尾字幕）；片尾广告的区间带第 4 项标记 `1`，前端对它直接跳 `duration - 0.5`（此处显示时间轴与 PTS 已错位，按时长累加算出的目标点会被 mpv 忽略）。前端另有单段锁 `adSkipLocked` 兜底。**这个 PTS 假设是整个算法的地基**，改切块或计时逻辑前先想清楚时间轴。
 - **mpv 时间轴偏移**（`electron/main.js` `mpv:state`）：mpv 的原始 `time-pos` 跨 `DISCONTINUITY` 会回零，而 UI 需要绝对秒数，所以维护 `timeOffset`（跳变 >15s 且不在自 seek 豁免期内才更新）。另用 `lastKnownPosition` 记忆最远位置，`ended` 必须同时满足「eof/idle」+「位置接近结尾 30s 内」，否则中途插播会被误判为播完而跳下一集。
 - **安全边界**：配置源 URL、`ext`、m3u8 内容都来自第三方。所有网络请求带桌面 UA、有超时；`innerHTML` 写入前必须 `escapeHtml()`；备份/还原路径必须过校验；日志里**不要打印完整配置源地址**（已有先例：只打 `name` 或 hostname）。
 
