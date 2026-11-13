@@ -680,10 +680,17 @@ ipcMain.handle('mpv:cmd', (evt, { name, args }) => {
     if (!inst || !native) return { error: 'mpv 未启动' };
     if (name === 'seek') {
       // seek 之后 mpv 报告的是绝对时间，偏移量清零，并给 5 秒豁免期避免误判为"时间轴重置"
+      const absolute = Number(args[0]) || 0;
       timeOffset = 0;
       selfSeekUntil = Date.now() + 5000;
-      lastRawPos = Number(args[0]) || 0;
-      native.command(inst, ['seek', String(args[0]), args[1] || 'absolute']);
+      lastRawPos = absolute;
+      // 跳到片尾附近（片尾广告就是这样跳的）：有的源 seek 到结尾会立刻 idle 且不再上报位置，
+      // lastKnownPosition 会停在广告开头，导致 ended 永远不成立 → 界面卡在 idle 不切集。
+      // 这里把目标位置记进「最远位置」，让播完判定成立。
+      if (lastKnownDuration > 0 && absolute >= lastKnownDuration - 3 && absolute > lastKnownPosition) {
+        lastKnownPosition = absolute;
+      }
+      native.command(inst, ['seek', String(absolute), args[1] || 'absolute']);
     } else if (name === 'cycle') {
       native.command(inst, ['cycle', String(args[0])]);
     } else if (name === 'set_property') {
