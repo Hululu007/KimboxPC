@@ -27,7 +27,7 @@ const PRE = Number(process.env.ACCEPT_PRE || 6);   // 提前几秒起播（尾�
 const normName = (s) => String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
   .replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】\-_]/g, '').toLowerCase();
 
-const fmt = (t) => { const v = Math.max(0, t); const m = Math.floor(v / 60); const s = v - m * 60; return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`; };
+const fmt = (t) => { const total = Math.round(Math.max(0, t) * 10) / 10; const m = Math.floor(total / 60); const s = total - m * 60; return `${m}:${s < 10 ? '0' : ''}${s.toFixed(1)}`; };
 
 /** 一次「起播 → 命中断言」验证。返回 { ok, reason, detail } */
 function runOne(proxyUrl, ranges, idx, duration, pre = PRE, maxMs = 25000) {
@@ -203,6 +203,7 @@ async function pool(items, worker, limit) {
   console.log(`\n完成 ${new Date().toLocaleTimeString()}（明细 _accept.json）`);
   process.exit(0);
 })().catch(e => { console.error('FAILED', e); process.exit(1); });
+
 
 
 
