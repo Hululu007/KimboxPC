@@ -901,9 +901,6 @@ function analyzeAdRanges(text) {
   const infos = chunks.map(chunkInfo);
   const totalDur = infos.reduce((a, b) => a + b.dur, 0);
 
-  let acc = 0;
-  const starts = infos.map(info => { const s = acc; acc += info.dur; return s; });
-
   const picked = [];
   for (let i = 1; i < chunks.length - 1; i++) {
     const { dur, segs } = infos[i];
@@ -913,7 +910,7 @@ function analyzeAdRanges(text) {
     const left = infos[i - 1], right = infos[i + 1];
     if (!(left.segs > 0 && left.dur >= need)) continue;          // 两侧都应是长正片
     if (!(right.segs > 0 && right.dur >= need)) continue;
-    picked.push({ idx: i, start: starts[i], end: starts[i] + dur, dur });
+    picked.push({ idx: i, dur, segs });
   }
 
   const adDur = picked.reduce((a, b) => a + b.dur, 0);
@@ -922,10 +919,32 @@ function analyzeAdRanges(text) {
     return { ranges: [], totalChunks: chunks.length, duration: Math.round(totalDur), rejected: true };
   }
 
+  const adIndices = new Set(picked.map(p => p.idx));
+
+  // 正片分片在源视频中是连续编码的（PTS 从 0 连续递增，不含插播广告时长）。
+  // 因此广告在播放器时间轴（PTS）上的实际插入点 = 该广告前面所有正片块的时长总和。
+  // 跳过广告后的目标点 = 紧接该广告的下一个正片块开头（即插入点 + 0.8 秒微调）。
+  let dramaAcc = 0;
+  const chunkPtsStarts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    chunkPtsStarts[i] = dramaAcc;
+    if (!adIndices.has(i)) {
+      dramaAcc += infos[i].dur;
+    }
+  }
+
+  const ranges = picked.map(p => {
+    const start = chunkPtsStarts[p.idx];
+    const end = start + p.dur;
+    const target = start + 0.8;
+    return [Math.round(start * 100) / 100, Math.round(end * 100) / 100, Math.round(target * 100) / 100];
+  });
+
   return {
-    ranges: picked.map(p => [Math.round(p.start * 100) / 100, Math.round(p.end * 100) / 100]),
+    ranges,
     totalChunks: chunks.length,
-    duration: Math.round(totalDur)
+    duration: Math.round(totalDur),
+    mainDuration: Math.round(dramaAcc)
   };
 }
 

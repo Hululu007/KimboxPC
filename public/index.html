@@ -3705,7 +3705,7 @@
         const s = ranges[i][0], e = ranges[i][1];
         if (pos >= s - 1.2 && pos < e - 0.2) {
           adSkipGuard = Date.now();
-          const target = e + 0.4;
+          const target = ranges[i][2] !== undefined ? ranges[i][2] : (e + 0.4);
           try {
             if (isMpv()) {
               mpvCmd('seek', [target, 'absolute']);
