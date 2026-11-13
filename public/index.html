@@ -3831,22 +3831,44 @@
           showToast(`从上次进度 ${fmtTime(resumeAt)} 继续（片头标记 ${Math.round(showMark.intro)} 秒）`, 2600);
         }
       }
-      const playUrl = finalUrl;
+      // 播放列表代理：部分 CDN 每次请求插的广告都不一样，分析用的 m3u8 必须和播放器
+      // 实际加载的是同一份 —— 由本地服务拉一次、改写分片地址后缓存，同一份文本既分析
+      // 又交给播放器。代理失败才退回「直连 + 旧的分析接口」。
+      let playUrl = finalUrl;
       let adRanges = [];
-      if (/\.m3u8/i.test(finalUrl) && adFilterEnabled()) {
+      let adTotalDur = 0;
+      let proxyOk = false;
+      const isHls = /\.m3u8/i.test(finalUrl);
+      if (isHls && adFilterEnabled()) {
         try {
-          const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}`)).json();
-          if (r && Array.isArray(r.ranges) && r.ranges.length) {
-            // 片头/片尾区间里的广告不用管：那两段本来就会被跳过
-            const durAll = Number(r.duration) || 0;
-            adRanges = r.ranges.filter(([s, e]) => {
-              if (showMark.intro > 1 && e <= showMark.intro + 1) return false;
-              if (durAll > 0 && showMark.outro > 1 && s >= durAll - showMark.outro - 1) return false;
-              return true;
-            });
-            if (adRanges.length) showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
+          const r = await (await fetch(`/api/hls?url=${encodeURIComponent(finalUrl)}`)).json();
+          if (r && r.absoluteUrl && Array.isArray(r.ranges)) {
+            playUrl = r.absoluteUrl;
+            adTotalDur = Number(r.duration) || 0;
+            adRanges = r.ranges;
+            proxyOk = true;
           }
         } catch (e) {}
+      }
+      // 只有代理失败才退回旧接口：代理成功时区间必须只认代理那份文本，
+      // 否则会拿到 CDN 另一次插播算出的区间，反而对不上。
+      if (!proxyOk && isHls && adFilterEnabled()) {
+        try {
+          const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}`)).json();
+          if (r && Array.isArray(r.ranges)) {
+            adTotalDur = Number(r.duration) || 0;
+            adRanges = r.ranges;
+          }
+        } catch (e) {}
+      }
+      if (adRanges.length) {
+        // 片头/片尾标记区间里的广告不用管：那两段本来就会被跳过
+        adRanges = adRanges.filter(([s, e]) => {
+          if (showMark.intro > 1 && e <= showMark.intro + 1) return false;
+          if (adTotalDur > 0 && showMark.outro > 1 && s >= adTotalDur - showMark.outro - 1) return false;
+          return true;
+        });
+        if (adRanges.length) showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
       }
       window.__adRanges = adRanges;
       adSkipLocked = -1;   // 换集后重新允许跳过（区间下标是新的）

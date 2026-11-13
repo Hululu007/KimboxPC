@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const PlayerLauncher = require('./playerLauncher');
@@ -987,6 +988,15 @@ function analyzeAdRanges(text) {
 }
 
 // 解析 master 播放列表 → 取第一个变体（与 /api/probe 的逻辑保持一致）
+// finalUrl 优先取 axios 跟随 302 之后的真实地址，分片相对路径要基于它解析。
+function axiosFinalUrl(r, fallback) {
+  try {
+    const u = r && r.request && r.request.res && r.request.res.responseUrl;
+    if (u) return u;
+  } catch (e) {}
+  return fallback;
+}
+
 async function fetchPlaylistMaybeMaster(url) {
   const r = await axios.get(url, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
   const text = String(r.data || '');
@@ -1004,14 +1014,14 @@ async function fetchPlaylistMaybeMaster(url) {
     }
     if (variant) {
       let abs = '';
-      try { abs = new URL(variant, url).href; } catch (e) {}
+      try { abs = new URL(variant, axiosFinalUrl(r, url)).href; } catch (e) {}
       if (abs) {
         const r2 = await axios.get(abs, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
-        return { text: String(r2.data || ''), finalUrl: abs };
+        return { text: String(r2.data || ''), finalUrl: axiosFinalUrl(r2, abs) };
       }
     }
   }
-  return { text, finalUrl: url };
+  return { text, finalUrl: axiosFinalUrl(r, url) };
 }
 
 const adRangesCache = new Map();
@@ -1034,6 +1044,88 @@ app.get('/api/ads', async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
+});
+
+
+
+/* ==================== 播放列表代理（分析与播放共用同一份 m3u8） ==================== */
+// 背景：部分 CDN 每次请求都返回不同的插播广告（实测同一地址连拉 4 次得到 4 组时长序列），
+// 而「先 /api/ads 分析、再由 mpv 直接拉 CDN」是两次独立请求，区间必然对不上。
+// 这里由本地服务拉一次、把分片/密钥地址改写成绝对地址后缓存，把同一份文本
+// 既用于 /api/ads 同样的区间计算，又通过本地 URL 交给播放器 —— 轮播就失效了。
+
+const hlsCache = new Map();          // token -> { text, ts, url }
+// mpv 拖动进度时可能重新读取播放列表，缓存要活得比一集更长；按条数上限淘汰即可
+const HLS_TTL = 6 * 60 * 60 * 1000;  // 6 小时
+const HLS_MAX = 200;
+
+/** 把播放列表里的相对地址改成绝对地址（分片行 + 各种 URI="..." 标签） */
+function absolutizePlaylist(text, baseUrl) {
+  const toAbs = (u) => {
+    if (!u) return u;
+    if (/^(https?:)?\/\//i.test(u) || /^data:/i.test(u)) return u;
+    try { return new URL(u, baseUrl).href; } catch (e) { return u; }
+  };
+  return String(text).split(/\r?\n/).map((line) => {
+    const s = line.trim();
+    if (!s) return '';
+    if (s.startsWith('#')) {
+      // #EXT-X-KEY / #EXT-X-MAP / #EXT-X-MEDIA / #EXT-X-I-FRAME-STREAM-INF 里的 URI
+      return line.replace(/URI="([^"]*)"/g, (m, u) => `URI="${toAbs(u)}"`);
+    }
+    return toAbs(s);
+  }).join('\n');
+}
+
+function pruneHlsCache() {
+  const now = Date.now();
+  for (const [k, v] of hlsCache) {
+    if (now - v.ts > HLS_TTL) hlsCache.delete(k);
+  }
+  while (hlsCache.size > HLS_MAX) hlsCache.delete(hlsCache.keys().next().value);
+}
+
+app.get('/api/hls', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  try {
+    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+    if (!/#EXTINF/i.test(text)) return res.status(502).json({ error: '不是有效的媒体播放列表' });
+
+    const abs = absolutizePlaylist(text, finalUrl);
+    const analysis = analyzeAdRanges(abs);
+    const token = crypto.randomBytes(8).toString('hex');
+
+    pruneHlsCache();
+    hlsCache.set(token, { text: abs, ts: Date.now(), url: finalUrl });
+
+    const pathPart = `/api/hls/${token}.m3u8`;
+    res.json({
+      token,
+      path: pathPart,
+      absoluteUrl: `${req.protocol}://${req.get('host')}${pathPart}`,
+      ranges: analysis.ranges,
+      edgeAds: analysis.edgeAds || 0,
+      duration: analysis.duration,
+      totalChunks: analysis.totalChunks,
+      source: finalUrl
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+app.get('/api/hls/:file', (req, res) => {
+  const token = String(req.params.file || '').replace(/\.m3u8$/i, '');
+  const hit = hlsCache.get(token);
+  if (!hit) return res.status(404).type('text/plain').send('playlist not found');
+  if (Date.now() - hit.ts > HLS_TTL) {
+    hlsCache.delete(token);
+    return res.status(404).type('text/plain').send('playlist expired');
+  }
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(hit.text);
 });
 
 
