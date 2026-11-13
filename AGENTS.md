@@ -4,6 +4,8 @@ KimBoxPC 是一个 **Windows 专用的 TVBox / FongMi 协议桌面播放客户�
 
 面向单人本机使用，**没有多用户、没有云端、没有构建流水线**。改动要能直接双击 `.bat` 跑起来。
 
+> **硬性纪律：每次改动都必须 git commit。** 任何代码、文档或版本号变更完成后立即提交（哪怕只有一行、哪怕还没验证完），保证任何时刻都能回滚。禁止把多处不相关改动攒成一个大提交，也禁止改完不提交就交付。
+
 ---
 
 ## 1. 运行与构建
@@ -65,7 +67,7 @@ data/                     全目录被 .gitignore，是用户真实数据
 
 - **配置源 0ms 秒开 + 热同步**（`server.js` `applyConfig()`）：先用 `data/cache/config_<id>.json` 立刻填充 `state.sites`，再后台拉远程；指纹（`key:api:name` 拼接）变化才 `state.sitesVersion = Date.now()`。`/api/configs/:id/sync` 是强制同步。切换站点时**优先保持当前活跃站点**（`stillActive`），不要退回第一站。
 - **跨站聚合搜索**（`/api/search/all`、`/api/sources`）：固定并发（8 / 6）+ 单站 9s 超时，片名用 `normName()`（去零宽字符、控制字符、标点、小写）后合并同名，保留首个并按来源数排序。前端用自增序列号丢弃过期响应。
-- **广告跳过**（`server.js analyzeAdRanges()` + 前端 `maybeSkipAd()`）：不改播放列表，只算区间。把 m3u8 按 `#EXT-X-DISCONTINUITY` 切块，挑「夹在两侧长正片之间、5~90 秒、1~30 片」的短块；命中数 >6 或广告总时长 >5% 就整体放弃（更可能是整集切片）。区间起点按**正片 PTS 累计**（广告段不计入）计算，返回 `[start, end, target]`，`target = start + 0.8`。**这个 PTS 假设是整个算法的地基**，改切块或计时逻辑前先想清楚时间轴。
+- **广告跳过**（`server.js analyzeAdRanges()` + 前端 `maybeSkipAd()`）：不改播放列表，只算区间。把 m3u8 按 `#EXT-X-DISCONTINUITY` 切块，挑「夹在两侧长正片之间、5~90 秒、1~30 片」的短块；命中数 >6 或广告总时长 >5% 就整体放弃（更可能是整集切片）。区间按**正片 PTS 累计**（广告段不计入）计算，返回 `[start, end, target]`，**`target` 必须是 `end + 0.4`（广告块之后），绝不能落在 `[start, end)` 内**——否则 seek 回来还在广告里，每轮轮询都重新命中，界面会无限弹「已跳过广告」。前端另有单段锁 `adSkipLocked` 与 `target > duration - 2` 兜底。**这个 PTS 假设是整个算法的地基**，改切块或计时逻辑前先想清楚时间轴。
 - **mpv 时间轴偏移**（`electron/main.js` `mpv:state`）：mpv 的原始 `time-pos` 跨 `DISCONTINUITY` 会回零，而 UI 需要绝对秒数，所以维护 `timeOffset`（跳变 >15s 且不在自 seek 豁免期内才更新）。另用 `lastKnownPosition` 记忆最远位置，`ended` 必须同时满足「eof/idle」+「位置接近结尾 30s 内」，否则中途插播会被误判为播完而跳下一集。
 - **安全边界**：配置源 URL、`ext`、m3u8 内容都来自第三方。所有网络请求带桌面 UA、有超时；`innerHTML` 写入前必须 `escapeHtml()`；备份/还原路径必须过校验；日志里**不要打印完整配置源地址**（已有先例：只打 `name` 或 hostname）。
 
@@ -78,6 +80,7 @@ data/                     全目录被 .gitignore，是用户真实数据
 - **后端**：Express 路由集中在 `server.js`，按 `/* ==================== 标题 ==================== */` 分段；数据访问只经 `db.js` 的 `*Repo`，不要在路由里直接写 SQL。新增表要同时改 `openDb()` 的建表语句和 `migrate()`（旧库用 `ALTER TABLE` 补列，保持向后兼容）。
 - **错误处理风格**：本项目的容错大量使用 `try/catch` 静默兜底（`catch (e) {}`），对外用 `res.status(4xx/5xx).json({ error })` 把原因带回前端，由 `showToast()` 展示。
 - **注释**：解释「为什么」（尤其是竞态、时序、协议怪癖），不要复述代码。
+- **提交（强制）**：每完成一处改动就单独 `git commit`，不要把多个不相关改动攒成一个提交，也不要改完不提交。信息用 `fix:` / `feat:` / `docs:` / `style:` 前缀 + 中文摘要，正文写清「根因 / 改动点 / 怎么验证」，方便事后 `git log` 定位与回滚。回滚优先 `git revert <hash>`（保留历史）；只回退某个文件用 `git checkout <hash> -- <file>`。`data/`、`*.lnk`、`native/build|lib`、`tools/*.exe` 一律不入库。
 
 ---
 
