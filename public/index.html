@@ -2529,6 +2529,9 @@
 
     /* ---------- 播放列表探测（带缓存，用于决定是否需要转封装） ---------- */
     const probeMemo = new Map();
+    // 本次播放「实际加载的列表」的片长（代理/剪辑返回）。>0 时，探测其它列表拿到的片长不得覆盖它，
+    // 否则剪辑模式下进度条会按原始片长算（多出被删的几十秒）。
+    let currentPlaylistDuration = 0;
 
     async function probeQuick(url, timeoutMs = 6000) {
       if (!url) return null;
@@ -2539,7 +2542,7 @@
         const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}`, { signal: ctrl.signal });
         clearTimeout(timer);
         const d = await r.json();
-        if (d && d.duration) compat.duration = d.duration;
+        if (d && d.duration && !currentPlaylistDuration) compat.duration = d.duration;
         probeMemo.set(url, d);
         if (probeMemo.size > 60) probeMemo.delete(probeMemo.keys().next().value);
         return d;
@@ -2561,7 +2564,7 @@
         .then(d => {
           const disc = d && d.disc ? d.disc : 0;
           if (d && d.duration) {
-            compat.duration = d.duration;
+            if (!currentPlaylistDuration) compat.duration = d.duration;
             updateControls();
           }
           showSourceWarn(disc);
@@ -4136,6 +4139,7 @@
       let playUrl = finalUrl;
       let adRanges = [];
       let adTotalDur = 0;
+      currentPlaylistDuration = 0;
       let proxyOk = false;
       let adRaw = null;
       const isHls = /\.m3u8/i.test(finalUrl);
@@ -4179,6 +4183,8 @@
       }
       window.__adRanges = adRanges;
       adSkipLocked = -1;   // 换集后重新允许跳过（区间下标是新的）
+      // 记住「本次实际加载的列表」的片长：剪辑模式下是剔除后的片长，探测原始列表不能覆盖它
+      currentPlaylistDuration = adTotalDur > 0 ? adTotalDur : 0;
 
       // 起播点若正好落在广告区间里（续播进度、片头标记落在广告中），先把它推到区间之后：
       // 否则开播一秒就要跳一次，兼容模式还得为此重启一次转封装。
@@ -4227,7 +4233,10 @@
         if (!info || info.disc === undefined) {
           info = await probeQuick(finalUrl, 8000, false);
         }
-        if (info && info.duration) compat.duration = info.duration;
+        // 片长优先用「本次实际加载的列表」的片长：剪辑模式下这份列表已经删掉广告，
+        // 而 probeQuick 探测的是另一份原始 CDN 列表，两者会差几十秒（进度条会错）。
+        if (currentPlaylistDuration > 0) compat.duration = currentPlaylistDuration;
+        else if (info && info.duration) compat.duration = info.duration;
         if (info && info.disc > 0) {
           playCompat(playUrl, resumeAt || 0);
           probeAndWarn(finalUrl, true);
