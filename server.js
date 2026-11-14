@@ -894,10 +894,26 @@ function chunkInfo(lines) {
    不删任何分片，因此时间轴、密钥、相对路径都不受影响。 */
 function analyzeAdRanges(text) {
   const chunks = splitByDiscontinuity(text);
-  if (chunks.length < 3) return { ranges: [], totalChunks: chunks.length, duration: 0 };
-
   const infos = chunks.map(chunkInfo);
   const totalDur = infos.reduce((a, b) => a + b.dur, 0);
+  const chunkListOf = (adSet) => infos.map((x, i) => ({
+    d: Math.round(x.dur * 100) / 100,
+    n: x.segs,
+    ad: adSet && adSet.has(i) ? 1 : 0
+  }));
+
+  // 分块不足 3 块（干净流 / 只有一个断点）不可能有「夹在正片中间」的插播，
+  // 但**片长必须照常返回**——以前这里直接给 duration:0，导致这类源在面板/剪辑里片长都是 0。
+  if (chunks.length < 3) {
+    return {
+      ranges: [],
+      chunks: chunkListOf(null),
+      edgeAds: 0,
+      totalChunks: chunks.length,
+      duration: Math.round(totalDur),
+      mainDuration: Math.round(totalDur)
+    };
+  }
 
   const picked = [];
   for (let i = 1; i < chunks.length - 1; i++) {
@@ -1006,30 +1022,45 @@ function axiosFinalUrl(r, fallback) {
 }
 
 async function fetchPlaylistMaybeMaster(url) {
-  const r = await axios.get(url, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
-  const text = String(r.data || '');
-  if (/#EXT-X-STREAM-INF/i.test(text) && !/#EXTINF/i.test(text)) {
-    const lines = text.split(/\r?\n/);
-    let variant = '';
-    for (let i = 0; i < lines.length; i++) {
-      if (!/^#EXT-X-STREAM-INF/i.test(lines[i])) continue;
-      for (let j = i + 1; j < lines.length; j++) {
-        const l = lines[j].trim();
-        if (!l || l.startsWith('#')) continue;
-        variant = l; break;
-      }
-      if (variant) break;
+  const fetchText = async (u) => {
+    const r = await axios.get(u, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
+    return { text: String(r.data || ''), finalUrl: axiosFinalUrl(r, u) };
+  };
+
+  let cur = url;
+  for (let depth = 0; depth < 3; depth++) {
+    let got = await fetchText(cur);
+    // 偶发：CDN 忙的时候会返回空壳/错误页（实测同一地址前两次拿到 0 个分片，第三次正常）。
+    // 这里对「既没有分片也没有变体」的响应重试一次，避免误判成「源不可用」。
+    if (!/#EXTINF/i.test(got.text) && !/#EXT-X-STREAM-INF/i.test(got.text)) {
+      await new Promise(r => setTimeout(r, 500));
+      try { got = await fetchText(cur); } catch (e) {}
     }
-    if (variant) {
-      let abs = '';
-      try { abs = new URL(variant, axiosFinalUrl(r, url)).href; } catch (e) {}
-      if (abs) {
-        const r2 = await axios.get(abs, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
-        return { text: String(r2.data || ''), finalUrl: axiosFinalUrl(r2, abs) };
+    const { text, finalUrl } = got;
+
+    // 主播放列表：往下钻一层（有的源变体地址本身又是 master，最多钻 3 层）
+    if (/#EXT-X-STREAM-INF/i.test(text) && !/#EXTINF/i.test(text)) {
+      const lines = text.split(/\r?\n/);
+      let variant = '';
+      for (let i = 0; i < lines.length; i++) {
+        if (!/^#EXT-X-STREAM-INF/i.test(lines[i])) continue;
+        for (let j = i + 1; j < lines.length; j++) {
+          const l = lines[j].trim();
+          if (!l || l.startsWith('#')) continue;
+          variant = l; break;
+        }
+        if (variant) break;
       }
+      if (!variant) return { text, finalUrl };
+      try { cur = new URL(variant, finalUrl).href; } catch (e) { return { text, finalUrl }; }
+      continue;
     }
+    return { text, finalUrl };
   }
-  return { text, finalUrl: axiosFinalUrl(r, url) };
+
+  // 钻到底仍未拿到媒体列表：返回最后一次内容，由调用方判断
+  const last = await fetchText(cur);
+  return last;
 }
 
 const adRangesCache = new Map();

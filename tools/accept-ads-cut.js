@@ -79,20 +79,36 @@ function probePlaylist(url, from, needContinuity) {
       const d = await CmsEngine.getDetail(site, vodId);
       const lines = (d.playSources || []).filter(l => l.episodes && l.episodes.length);
       if (!lines.length) { row.note = '无线路'; rows.push(row); console.log(`FAIL  ${row.site}  ${row.note}`); continue; }
-      const line = lines.find(l => /\.m3u8/i.test(l.episodes[0].url)) || lines[0];
-      let epUrl = line.episodes[0].url;
-      if (!/\.m3u8/i.test(epUrl)) {
-        // 首集是网页壳：先走 /api/resolve（和 App 里的处理一致）
-        try {
-          const rr = (await axios.get(`${API}/api/resolve`, { params: { url: epUrl }, timeout: 40000 })).data;
-          if (rr && rr.url && /\.m3u8/i.test(rr.url)) epUrl = rr.url;
-        } catch (e) {}
-        if (!/\.m3u8/i.test(epUrl)) { row.note = '非 m3u8（且解析失败）'; row.notApplicable = true; rows.push(row); console.log(`SKIP  ${row.site}  ${row.note}`); continue; }
-      }
 
-      const skip = (await axios.get(`${API}/api/hls`, { params: { url: epUrl }, timeout: 60000 })).data;
-      const cut = (await axios.get(`${API}/api/hls`, { params: { url: epUrl, mode: 'cut' }, timeout: 60000 })).data;
-      if (!skip.duration || !cut.duration) { row.note = '源返回的列表没有分片（无法分析，与剪辑无关）'; row.notApplicable = true; rows.push(row); console.log(`SKIP  ${row.site}  ${row.note}`); continue; }
+      // 候选地址：m3u8 线路优先，网页壳线路走 /api/resolve；按顺序试，直到拿到可分片的列表
+      const candidates = [];
+      for (const l of lines) if (/\.m3u8/i.test(l.episodes[0].url)) candidates.push(l.episodes[0].url);
+      for (const l of lines) {
+        const u = l.episodes[0].url;
+        if (/\.m3u8/i.test(u)) continue;
+        try {
+          const rr = (await axios.get(`${API}/api/resolve`, { params: { url: u }, timeout: 40000 })).data;
+          if (rr && rr.url && /\.m3u8/i.test(rr.url)) candidates.push(rr.url);
+        } catch (e) {}
+      }
+      if (!candidates.length) { row.note = '没有可解析的 m3u8'; row.notApplicable = true; rows.push(row); console.log(`SKIP  ${row.site}  ${row.note}`); continue; }
+
+      // 偶发：CDN 忙时列表会返回空壳，重试几次再下结论
+      let skip = null, cut = null, epUrl = '';
+      for (const cand of [...new Set(candidates)].slice(0, 3)) {
+        for (let attempt = 0; attempt < 3 && !skip; attempt++) {
+          try {
+            const s = (await axios.get(`${API}/api/hls`, { params: { url: cand }, timeout: 60000 })).data;
+            if (s && s.duration > 0) {
+              const c = (await axios.get(`${API}/api/hls`, { params: { url: cand, mode: 'cut' }, timeout: 60000 })).data;
+              if (c && c.duration > 0) { skip = s; cut = c; epUrl = cand; }
+            }
+          } catch (e) {}
+          if (!skip) await sleep(1200);
+        }
+        if (skip) break;
+      }
+      if (!skip) { row.note = '多次重试仍拿不到可分片的列表'; row.notApplicable = true; rows.push(row); console.log(`SKIP  ${row.site}  ${row.note}`); continue; }
 
       const adChunks = (skip.chunks || []).filter(c => c.ad);
       row.ads = adChunks.length;
