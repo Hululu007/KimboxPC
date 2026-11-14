@@ -1239,9 +1239,9 @@
         <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
-      <select class="ctrl-rate" id="adModeSel" onchange="changeAdMode(this.value)" title="广告处理方式（两者互不影响）：
-· 跳过：保留源列表，播到广告处自动跳走（默认，最稳）
-· 剪辑：直接删掉广告分片、重算播放列表（无跳转卡顿，个别源可能有两三秒误差）">
+      <select class="ctrl-rate" id="adModeSel" onchange="changeAdMode(this.value)" title="广告处理方式（两者互不影响，默认「剪辑」）：
+· 剪辑：直接删掉广告分片、重算播放列表（默认，无跳转卡顿）
+· 跳过：保留源列表，播到广告处自动跳走（最稳，源异常时的备选）">
         <option value="cut">广告：剪辑</option>
         <option value="skip">广告：跳过</option>
       </select>
@@ -3574,7 +3574,11 @@
        注意：剪辑后播放器的时间轴会变短，历史进度/片尾标记是按当前方式记录的，
        所以同一集在两种方式之间切换，续播点可能有几十秒偏移（不会跳错集）。 */
     function adMode() {
-      try { return localStorage.getItem('tvbox_admode') === 'cut' ? 'cut' : 'skip'; } catch (e) { return 'skip'; }
+      try {
+        const v = localStorage.getItem('tvbox_admode');
+        if (v === 'cut' || v === 'skip') return v;
+        return 'cut';   // 没设置过 → 默认「剪辑」：列表里直接没有广告，体验更好
+      } catch (e) { return 'cut'; }
     }
     function syncAdModeUI() {
       const sel = document.getElementById('adModeSel');
