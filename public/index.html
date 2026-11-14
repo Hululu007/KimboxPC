@@ -1239,6 +1239,12 @@
         <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
+      <select class="ctrl-rate" id="adModeSel" onchange="changeAdMode(this.value)" title="广告处理方式（两者互不影响）：
+· 跳过：保留源列表，播到广告处自动跳走（默认，最稳）
+· 剪辑：直接删掉广告分片、重算播放列表（无跳转卡顿，个别源可能有两三秒误差）">
+        <option value="skip">广告：跳过</option>
+        <option value="cut">广告：剪辑</option>
+      </select>
       <button class="secondary" id="btnAdDebug" onclick="toggleAdDebug()" title="显示检测到的广告区间、跳转目标与分块结构（快捷键 D）">🐞 调试</button>
       <button class="secondary fav-btn" id="btnFav" onclick="toggleCurrentFav()">☆ 收藏</button>
       <button class="secondary" onclick="toggleFullscreen()">⛶ 全屏 (F)</button>
@@ -1430,6 +1436,7 @@
       await refreshConfigList();
       await loadPlayers();
       await initBossKey();
+      syncAdModeUI();
       if (adDebugOn()) toggleAdDebug(true);   // 上次开着就继续显示
       await bootstrap();
     };
@@ -3230,6 +3237,7 @@
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
+      syncAdModeUI();
       syncCacheUI();
       // 恢复信息层（OSD）显示状态
       {
@@ -3556,6 +3564,26 @@
       try { localStorage.setItem('tvbox_adfilter', on ? '1' : '0'); } catch (e) {}
       syncAdFilterUI();
       showToast(on ? '已开启广告拦截（重新打开该集生效）' : '已关闭广告拦截，将使用源原始列表（最稳）', 3000);
+    }
+
+    /* ---------- 广告处理方式（第 2 种）：skip = 运行时跳过 / cut = 剪辑掉广告分片 ----------
+       两种方式互不影响：skip 完全保持原有行为；cut 只是让服务端把广告块从列表里删掉。
+       注意：剪辑后播放器的时间轴会变短，历史进度/片尾标记是按当前方式记录的，
+       所以同一集在两种方式之间切换，续播点可能有几十秒偏移（不会跳错集）。 */
+    function adMode() {
+      try { return localStorage.getItem('tvbox_admode') === 'cut' ? 'cut' : 'skip'; } catch (e) { return 'skip'; }
+    }
+    function syncAdModeUI() {
+      const sel = document.getElementById('adModeSel');
+      if (sel) sel.value = adMode();
+    }
+    function changeAdMode(v) {
+      const mode = v === 'cut' ? 'cut' : 'skip';
+      try { localStorage.setItem('tvbox_admode', mode); } catch (e) {}
+      syncAdModeUI();
+      showToast(mode === 'cut'
+        ? '已切到「剪辑」：重新打开该集生效（直接把广告分片删掉，无跳转卡顿）'
+        : '已切到「跳过」：重新打开该集生效（播到广告处自动跳走，最稳）', 3400);
     }
 
     /* ---------- 缓冲档位 ----------
@@ -3952,11 +3980,15 @@
         return;
       }
 
-      const rows = (d.ranges || []).map((r, i) => {
-        const tail = r[3] === 1;
-        const to = tail ? '跳到结尾' : `跳到 ${fmtAd(r[2])}`;
-        return `<div class="ad-row${tail ? ' tail' : ''}">#${i + 1} ${fmtAd(r[0])} – ${fmtAd(r[1])} (${(r[1] - r[0]).toFixed(1)}s) → ${to}</div>`;
-      }).join('') || '<div class="ad-dim">未检测到广告区间</div>';
+      const rows = (d.ranges || []).length
+        ? (d.ranges || []).map((r, i) => {
+          const tail = r[3] === 1;
+          const to = tail ? '跳到结尾' : `跳到 ${fmtAd(r[2])}`;
+          return `<div class="ad-row${tail ? ' tail' : ''}">#${i + 1} ${fmtAd(r[0])} – ${fmtAd(r[1])} (${(r[1] - r[0]).toFixed(1)}s) → ${to}</div>`;
+        }).join('')
+        : (d.cut
+          ? (d.cuts || []).map((c, i) => `<div class="ad-row">#${i + 1} 已删除 ${fmtAd(c[0])} – ${fmtAd(c[1])} (${(c[1] - c[0]).toFixed(1)}s)</div>`).join('')
+          : '<div class="ad-dim">未检测到广告区间</div>');
 
       const chunkLine = (d.chunks || []).map((c, i) =>
         `<span class="${c.ad ? 'ad-row' : 'ad-dim'}">${i}:${Number(c.d).toFixed(0)}s/${c.n}${c.ad ? '★' : ''}</span>`
@@ -3964,16 +3996,16 @@
 
       body.innerHTML =
         `<div><span class="ad-dim">剧集 </span>${escapeHtml(d.title || '-')}</div>` +
-        `<div><span class="ad-dim">来源 </span>${d.proxy ? '本地代理' : '直连'}` +
-        `<span class="ad-dim">　片长 </span>${d.duration ? fmtAd(d.duration) : '--'}` +
-        `<span class="ad-dim">　分块 </span>${(d.chunks || []).length}</div>` +
+        `<div><span class="ad-dim">方式 </span>${d.cut ? `剪辑（剔除 ${(d.cuts || []).length} 段 / ${Math.round(d.removed)}s）` : '跳过（播到广告处自动跳走）'}` +
+        `<span class="ad-dim">　来源 </span>${d.proxy ? '本地代理' : '直连'}` +
+        `<span class="ad-dim">　片长 </span>${d.duration ? fmtAd(d.duration) : '--'}</div>` +
         rows +
         `<div style="margin-top:6px"><span class="ad-dim">分块 </span>${chunkLine}</div>` +
         `<div style="margin-top:6px" class="ad-dim">#n 开始–结束 (时长) → 目标；★ = 判定为广告</div>`;
 
       const pos = isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0);
       const idx = adRangeIndexAt(pos);
-      let state = '不在广告区间';
+      let state = d.cut ? '剪辑模式：列表里已无广告' : '不在广告区间';
       if (idx >= 0) {
         const r = (window.__adRanges || [])[idx];
         state = r ? `命中 #${idx + 1} → ${fmtAd(r[2])}` : '命中';
@@ -3988,6 +4020,7 @@
       const lines = [
         `剧集: ${d.title || '-'}`,
         `媒体: ${d.url || '-'}`,
+        `方式: ${d.cut ? '剪辑（剔除 ' + (d.cuts || []).length + ' 段 / ' + Math.round(d.removed) + ' 秒）' : '跳过'}`,
         `代理: ${d.proxy ? '是' : '否'}  片长: ${fmtAd(d.duration)}  分块: ${(d.chunks || []).length}`
       ];
       (d.ranges || []).forEach((r, i) => {
@@ -4108,13 +4141,18 @@
       const isHls = /\.m3u8/i.test(finalUrl);
       if (isHls && adFilterEnabled()) {
         try {
-          const r = await (await fetch(`/api/hls?url=${encodeURIComponent(finalUrl)}`)).json();
-          if (r && r.absoluteUrl && Array.isArray(r.ranges)) {
+          // 方式 2「剪辑」：让服务端把广告块删掉；失败则自动退回「跳过」的原有路径
+          const wantCut = adMode() === 'cut';
+          const r = await (await fetch(`/api/hls?url=${encodeURIComponent(finalUrl)}${wantCut ? '&mode=cut' : ''}`)).json();
+          if (r && r.absoluteUrl && (Array.isArray(r.ranges) || r.cut)) {
             playUrl = r.absoluteUrl;
             adTotalDur = Number(r.duration) || 0;
-            adRanges = r.ranges;
+            adRanges = r.cut ? [] : (r.ranges || []);
             adRaw = r;
             proxyOk = true;
+            if (r.cut) {
+              showToast(`已剪辑：剔除 ${r.cuts.length} 段广告（${Math.round(r.removedSeconds)} 秒）`, 3200);
+            }
           }
         } catch (e) {}
       }
@@ -4163,7 +4201,11 @@
         proxy: proxyOk,
         duration: adTotalDur,
         ranges: adRanges.slice(),
-        chunks: (adRaw && Array.isArray(adRaw.chunks)) ? adRaw.chunks : []
+        chunks: (adRaw && Array.isArray(adRaw.chunks)) ? adRaw.chunks : [],
+        mode: (adRaw && adRaw.mode) || (adMode() === 'cut' ? 'cut' : 'skip'),
+        cut: !!(adRaw && adRaw.cut),
+        cuts: (adRaw && Array.isArray(adRaw.cuts)) ? adRaw.cuts : [],
+        removed: (adRaw && Number(adRaw.removedSeconds)) || 0
       };
       if (adDebugOn()) renderAdDebug(true);
 

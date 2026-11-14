@@ -1093,9 +1093,60 @@ function pruneHlsCache() {
   while (hlsCache.size > HLS_MAX) hlsCache.delete(hlsCache.keys().next().value);
 }
 
+/**
+ * 「剪辑」模式：把判定为广告的块从播放列表里整块删掉，重新生成一份干净列表。
+ * 拼接处保留一个 #EXT-X-DISCONTINUITY，让播放器重置时间轴（实测 mpv 与 hls.js 都能无缝接）。
+ * 返回被删掉的区间（**原时间轴**）与总秒数，供前端做时间轴换算。
+ */
+function buildCutPlaylist(text, analysis) {
+  const lines = String(text).split(/\r?\n/);
+  const header = [];
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const s = lines[i].trim();
+    if (s.startsWith('#EXTINF')) break;
+    if (s && !/^#EXT-X-DISCONTINUITY/i.test(s)) header.push(lines[i]);
+  }
+
+  const chunks = []; let cur = [];
+  for (; i < lines.length; i++) {
+    const s = lines[i].trim();
+    if (/^#EXT-X-DISCONTINUITY/i.test(s)) { chunks.push(cur); cur = []; }
+    else if (s) cur.push(lines[i]);
+  }
+  chunks.push(cur);
+
+  const flags = (analysis.chunks || []).map(c => !!c.ad);
+  const out = header.slice();
+  const cuts = [];
+  let acc = 0, removed = 0, kept = 0;
+
+  chunks.forEach((c, idx) => {
+    let dur = 0;
+    for (const l of c) {
+      const s = l.trim();
+      if (s.startsWith('#EXTINF')) dur += parseFloat(s.split(':')[1]) || 0;
+    }
+    const start = acc;
+    acc += dur;
+    if (flags[idx]) {
+      cuts.push([Math.round(start * 100) / 100, Math.round(acc * 100) / 100]);
+      removed += dur;
+      return;
+    }
+    if (kept > 0) out.push('#EXT-X-DISCONTINUITY');
+    out.push(...c);
+    kept++;
+  });
+
+  return { text: out.join('\n') + '\n', cuts, removed: Math.round(removed * 100) / 100, kept };
+}
+
 app.get('/api/hls', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!url) return res.status(400).json({ error: '缺少 url 参数' });
+  // mode=cut：剪辑模式（删广告块）；默认 skip：保留原列表，播放时跳过
+  const useCut = String(req.query.mode || '').toLowerCase() === 'cut';
   try {
     const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
     if (!/#EXTINF/i.test(text)) return res.status(502).json({ error: '不是有效的媒体播放列表' });
@@ -1104,18 +1155,33 @@ app.get('/api/hls', async (req, res) => {
     const analysis = analyzeAdRanges(abs);
     const token = crypto.randomBytes(8).toString('hex');
 
+    let served = abs;
+    let cut = null;
+    if (useCut) {
+      const built = buildCutPlaylist(abs, analysis);
+      if (built.cuts.length) {
+        served = built.text;
+        cut = { cuts: built.cuts, removed: built.removed, kept: built.kept };
+      }
+    }
+
     pruneHlsCache();
-    hlsCache.set(token, { text: abs, ts: Date.now(), url: finalUrl });
+    hlsCache.set(token, { text: served, ts: Date.now(), url: finalUrl });
 
     const pathPart = `/api/hls/${token}.m3u8`;
     res.json({
       token,
       path: pathPart,
       absoluteUrl: `${req.protocol}://${req.get('host')}${pathPart}`,
-      ranges: analysis.ranges,
+      mode: cut ? 'cut' : 'skip',
+      cut: !!cut,
+      cuts: cut ? cut.cuts : [],
+      removedSeconds: cut ? cut.removed : 0,
+      ranges: cut ? [] : analysis.ranges,
       chunks: analysis.chunks || [],
       edgeAds: analysis.edgeAds || 0,
-      duration: analysis.duration,
+      duration: cut ? Math.round((analysis.duration - cut.removed) * 100) / 100 : analysis.duration,
+      sourceDuration: analysis.duration,
       totalChunks: analysis.totalChunks,
       source: finalUrl
     });
