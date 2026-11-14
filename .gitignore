@@ -43,4 +43,5 @@ data/adfilter.json
 _l*.log
 _l*.err
 _accept.json
+_cut_accept.json
 
