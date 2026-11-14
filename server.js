@@ -1096,48 +1096,68 @@ function pruneHlsCache() {
 /**
  * 「剪辑」模式：把判定为广告的块从播放列表里整块删掉，重新生成一份干净列表。
  * 拼接处保留一个 #EXT-X-DISCONTINUITY，让播放器重置时间轴（实测 mpv 与 hls.js 都能无缝接）。
- * 返回被删掉的区间（**原时间轴**）与总秒数，供前端做时间轴换算。
+ * 返回被删掉的区间（**原时间轴**）与总秒数，供前端展示。
+ *
+ * ⚠️ 分块必须与 analyzeAdRanges() 里的 splitByDiscontinuity() 完全一致（连表头所在的行也算进第 0 块），
+ * 否则 analysis.chunks 的 ad 标记会整体错位——曾因此把两块正片当广告删掉（片长从 46 分钟变 9 分钟）。
  */
 function buildCutPlaylist(text, analysis) {
   const lines = String(text).split(/\r?\n/);
-  const header = [];
-  let i = 0;
-  for (; i < lines.length; i++) {
-    const s = lines[i].trim();
-    if (s.startsWith('#EXTINF')) break;
-    if (s && !/^#EXT-X-DISCONTINUITY/i.test(s)) header.push(lines[i]);
-  }
 
-  const chunks = []; let cur = [];
-  for (; i < lines.length; i++) {
-    const s = lines[i].trim();
-    if (/^#EXT-X-DISCONTINUITY/i.test(s)) { chunks.push(cur); cur = []; }
-    else if (s) cur.push(lines[i]);
+  // 与 analyzeAdRanges 相同的切块方式：只在 #EXT-X-DISCONTINUITY 处断开，表头留在第 0 块里
+  const blocks = [];
+  let startLine = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^#EXT-X-DISCONTINUITY\b/i.test(lines[i].trim())) {
+      blocks.push([startLine, i]);
+      startLine = i + 1;
+    }
   }
-  chunks.push(cur);
+  blocks.push([startLine, lines.length]);
 
-  const flags = (analysis.chunks || []).map(c => !!c.ad);
-  const out = header.slice();
+  // 保险：只删「像广告」的块，任何异常（超长块、分片过多）都不删，宁可少删也不误删正片
+  const safeToCut = (c) => !!c && c.ad && Number(c.d) >= 5 && Number(c.d) <= 120 && Number(c.n) <= 40;
+
+  // #EXT-X-ENDLIST 通常在最后一块里：如果最后一块正好是片尾广告被删掉，
+  // 这个标签也会跟着消失 —— 播放器会当成直播流，从末尾开始播、时长也算错。
+  const hadEndList = lines.some(l => /^#EXT-X-ENDLIST/i.test(l.trim()));
+
+  const out = [];
   const cuts = [];
   let acc = 0, removed = 0, kept = 0;
 
-  chunks.forEach((c, idx) => {
+  blocks.forEach(([a, b], idx) => {
     let dur = 0;
-    for (const l of c) {
-      const s = l.trim();
+    for (let i = a; i < b; i++) {
+      const s = lines[i].trim();
       if (s.startsWith('#EXTINF')) dur += parseFloat(s.split(':')[1]) || 0;
     }
     const start = acc;
     acc += dur;
-    if (flags[idx]) {
+
+    const chunk = (analysis.chunks || [])[idx];
+    if (safeToCut(chunk)) {
       cuts.push([Math.round(start * 100) / 100, Math.round(acc * 100) / 100]);
       removed += dur;
+      // 第 0 块要是被整体删掉，它的表头（#EXTM3U / 版本 / TARGETDURATION 等）仍要保留
+      if (idx === 0) {
+        const hdr = [];
+        for (let i = a; i < b; i++) {
+          if (lines[i].trim().startsWith('#EXTINF')) break;
+          hdr.push(lines[i]);
+        }
+        out.push(...hdr);
+      }
       return;
     }
+
     if (kept > 0) out.push('#EXT-X-DISCONTINUITY');
-    out.push(...c);
+    // ENDLIST 统一在末尾补一次，避免重复或丢失
+    out.push(...lines.slice(a, b).filter(l => !/^#EXT-X-ENDLIST/i.test(l.trim())));
     kept++;
   });
+
+  if (hadEndList) out.push('#EXT-X-ENDLIST');
 
   return { text: out.join('\n') + '\n', cuts, removed: Math.round(removed * 100) / 100, kept };
 }
