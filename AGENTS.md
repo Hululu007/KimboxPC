@@ -17,6 +17,7 @@ KimBoxPC 是一个 **Windows 专用的 TVBox / FongMi 协议桌面播放客户�
 | 用户实际启动方式 | 双击 `KimBoxPC-桌面版.bat`（或桌面快捷方式） |
 | 重新编译原生模块 | 双击 `tools\编译原生模块.bat`（**不要**用 `npm run build:native` 直接跑，需 `ELECTRON_RUN_AS_NODE=1` 用 Electron 自带的 node） |
 | 打包便携版 zip | 双击 `打包发布.bat` → `tools\打包发布.ps1`，输出到**上级目录** `KimBoxPC_v<version>.zip` |
+| 打包安装版 setup.exe | 双击 `制作安装包.bat` → `tools\build-installer.ps1`，产物在**上级目录** `KimBoxPC_v<version>_Setup.exe`（Inno Setup 6；按用户安装到 `%LOCALAPPDATA%\Programs\KimBoxPC`，自动建快捷方式与卸载项） |
 | 修环境（VC++ / 文件解锁 / 校验 dll） | 双击 `修复运行环境.bat` |
 
 要求：Node ≥ 22.5（用到 `node:sqlite`）、Windows x64、VC++ 2015-2022 运行库。项目无 npm `build`、无 lint、无测试框架。
