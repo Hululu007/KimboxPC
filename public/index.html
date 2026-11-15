@@ -2452,6 +2452,14 @@
       }
     }
 
+    /** 站点 key → 界面显示名（收藏/历史里标来源；站点已不在当前配置时退回 key） */
+    function siteNameOf(key) {
+      try {
+        const s = (window.__siteList || []).find(x => x.key === key);
+        return (s && s.name) || key || '';
+      } catch (e) { return key || ''; }
+    }
+
     function buildCard(v) {
       const siteKey = v.siteKey || activeSiteKey;
       const card = document.createElement('div');
@@ -3116,6 +3124,7 @@
           vod_pic: f.vod_pic,
           vod_remarks: f.remarks,
           siteKey: f.site_key,
+          siteName: siteNameOf(f.site_key),
           faved: true
         }));
         renderStaticList(list, '还没有收藏。进入影片播放页后点右上角「☆ 收藏」。', '收藏');
@@ -3136,6 +3145,8 @@
           vod_pic: h.vod_pic,
           vod_remarks: h.ep_name || '',
           siteKey: h.site_key,
+          // 历史里连线路一起标出来：站点名 · 线路名
+          siteName: [siteNameOf(h.site_key), h.source].filter(Boolean).join(' · '),
           position: h.position,
           duration: h.duration,
           faved: false
