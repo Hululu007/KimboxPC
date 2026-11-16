@@ -1236,6 +1236,7 @@
       <span class="engine-label">引擎</span>
       <select class="ctrl-rate engine-sel" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
         <option value="mpv">mpv</option>
+        <option value="mse">网页 (MSE)</option>
         <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
@@ -1374,6 +1375,7 @@
         <div class="row-label" id="engineRowLabel">播放引擎（默认 mpv 内核；ffmpeg 作为兼容）：</div>
         <div class="source-tabs" id="engineBtns">
           <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（推荐）</div>
+          <div class="source-tab" data-engine="mse" onclick="changeEngine('mse')">网页 (MSE)</div>
           <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">ffmpeg (兼容)</div>
         </div>
 
@@ -2623,13 +2625,15 @@
       syncEngineUI();
 
       if (v === 'mpv') showToast('已切换到 mpv 内核，正在重载…', 2500);
+      else if (v === 'mse') showToast('已切换到网页内核 (MSE)，正在重载…', 2500);
       else showToast('已切换到 ffmpeg 兼容内核，正在重载…', 2500);
 
       if (currentDetail) reloadCurrentEpisode(true, keepPos);
     }
 
     function syncEngineUI() {
-      const mpv = isMpv();
+      const mode = engineMode();
+      const mpv = mode === 'mpv';
       const stage = document.getElementById('mpvStage');
       if (stage) stage.classList.toggle('show', mpv && !isNativeShell());
       const canvas = document.getElementById('mpvCanvas');
@@ -2637,7 +2641,7 @@
 
       const sel = document.getElementById('engineSel');
       if (sel) {
-        sel.value = mpv ? 'mpv' : 'browser';
+        sel.value = mode;
         sel.classList.toggle('mpv', mpv);
       }
 
@@ -2652,14 +2656,14 @@
       if (engineBtns) engineBtns.style.display = native ? 'flex' : 'none';
 
       const compatBox = document.getElementById('compatOptions');
-      if (compatBox) compatBox.style.display = mpv ? 'none' : 'block';
+      if (compatBox) compatBox.style.display = (mode === 'browser') ? 'block' : 'none';
 
       // 通用开关（自动连播 / 广告拦截）与引擎无关，任何引擎下都要显示
       const generalBox = document.getElementById('generalOptions');
       if (generalBox) generalBox.style.display = 'block';
 
       document.querySelectorAll('#engineBtns .source-tab').forEach(el => {
-        el.classList.toggle('active', el.dataset.engine === (mpv ? 'mpv' : 'browser'));
+        el.classList.toggle('active', el.dataset.engine === mode);
       });
     }
 
@@ -4240,9 +4244,15 @@
       await stopMpvPlayback();   // 从 mpv 切回浏览器时，先停掉 mpv，避免两路同时出声
       setTimeout(updateVolumeUI, 300);
 
+      // 引擎模式：
+      //   mpv     → 上面已返回，走原生解码
+      //   browser → ffmpeg 兼容内核：脏流（有时间戳重置）才转封装，干净流走 hls.js
+      //   mse     → 「网页 (MSE)」：强制 hls.js + 浏览器原生解码，从不转封装（用于对比/高配机器）
+      const forceMse = engineMode() === 'mse';
+
       // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
-      if (compatEnabled() && /\.m3u8/i.test(playUrl)) {
+      if (!forceMse && compatEnabled() && /\.m3u8/i.test(playUrl)) {
         // 用普通探测判断「是否有时间戳重置」即可（不需要过滤后的统计了）
         let info = await probeQuick(finalUrl, 8000, false);
         if (!info || info.disc === undefined) {
@@ -4272,18 +4282,40 @@
         }
       };
 
-      if (finalUrl.includes('.m3u8')) {
+      if (playUrl.includes('.m3u8')) {
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-          hls = new Hls({
-            maxBufferLength: cacheSecs(),
-            maxMaxBufferLength: cacheSecs() * 2,
-            backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
-            enableWorker: true,
-            maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
-            enableCEA708Captions: false,
-            manifestLoadingTimeOut: 15000,
-            fragLoadingTimeOut: 20000
-          });
+          // 「网页 (MSE)」用一套更激进的缓冲/预取参数（参考 KVideo 的配置），
+          // 只影响这个新增引擎，默认 mpv 与 ffmpeg 兼容内核的行为保持不变。
+          const hlsCfg = forceMse
+            ? {
+              enableWorker: true,
+              lowLatencyMode: false,
+              startFragPrefetch: true,
+              maxBufferLength: 120,
+              maxMaxBufferLength: 240,
+              maxBufferSize: 120 * 1000 * 1000,
+              maxBufferHole: 0.5,
+              backBufferLength: 90,
+              fragLoadingMaxRetry: 6,
+              fragLoadingRetryDelay: 1000,
+              manifestLoadingMaxRetry: 4,
+              levelLoadingMaxRetry: 4,
+              fragLoadingTimeOut: 20000,
+              manifestLoadingTimeOut: 10000,
+              maxAudioFramesDrift: 5,
+              enableCEA708Captions: false
+            }
+            : {
+              maxBufferLength: cacheSecs(),
+              maxMaxBufferLength: cacheSecs() * 2,
+              backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
+              enableWorker: true,
+              maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
+              enableCEA708Captions: false,
+              manifestLoadingTimeOut: 15000,
+              fragLoadingTimeOut: 20000
+            };
+          hls = new Hls(hlsCfg);
           hls.loadSource(playUrl);
           hls.attachMedia(video);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -5310,3 +5342,4 @@
 
 </body>
 </html>
+
