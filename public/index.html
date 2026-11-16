@@ -2565,6 +2565,8 @@
     /** 探测播放列表封装质量：记录时长、显示提示条、必要时建议换用外部播放器 */
     function probeAndWarn(url, silent) {
       if (!url || !url.includes('.m3u8')) return;
+      // 「网页 (MSE)」是用户主动选的对比内核：时间戳提示在这里只是噪音，直接不提示
+      if (engineMode() === 'mse') return;
       if (url === window.__probeWarnedUrl) return;
       window.__probeWarnedUrl = url;
 
@@ -4283,6 +4285,11 @@
         }
       }
       destroyCompat();
+      // 网页(MSE) 内核：顺手清掉上一个内核可能留下的「时间戳重置」提示条
+      if (forceMse) {
+        const wb = document.getElementById('srcWarn');
+        if (wb) wb.style.display = 'none';
+      }
       probeAndWarn(finalUrl, false);
 
       const seek = () => {
@@ -4771,7 +4778,8 @@
       const box = document.getElementById('srcWarn');
       const txt = document.getElementById('srcWarnText');
       if (!box || !txt) return;
-      if (!disc || disc <= 0 || isMpv()) { box.style.display = 'none'; return; }
+      // 网页(MSE) 内核下不显示这类提示条
+      if (!disc || disc <= 0 || isMpv() || engineMode() === 'mse') { box.style.display = 'none'; return; }
       const engine = engineMode();
       // 「ffmpeg (兼容)」模式下脏流会自动转封装，不需要提示；其它内核如实提示
       if (engine !== 'mse' && compatEnabled()) { box.style.display = 'none'; return; }
