@@ -4211,6 +4211,22 @@
         });
         if (adRanges.length) showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
       }
+
+      // MSE 内核（hls.js）的时间轴是「连续拼接」，广告分片的时长也被算进去；
+      // 而区间是按正片 PTS 算的（mpv 的 time-pos 走的也是 PTS），所以 MSE 下必须把每段
+      // 广告按「它前面所有广告的总时长」整体后移，否则会在广告真正出现前 20 多秒就跳走。
+      if (engineMode() === 'mse' && adRanges.length) {
+        let off = 0;
+        adRanges = adRanges.map(rg => {
+          const out = [rg[0] + off, rg[1] + off, rg[2] + off];
+          if (rg[3]) {
+            out[3] = rg[3];
+            out[2] = rg[2];   // 片尾广告的目标点是「时长 - 0.5」，不能跟着后移
+          }
+          off += Math.max(0, rg[1] - rg[0]);
+          return out;
+        });
+      }
       window.__adRanges = adRanges;
       adSkipLocked = -1;   // 换集后重新允许跳过（区间下标是新的）
       // 记住「本次实际加载的列表」的片长：剪辑模式下是剔除后的片长，探测原始列表不能覆盖它
