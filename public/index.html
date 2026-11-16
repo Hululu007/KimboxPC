@@ -3864,6 +3864,8 @@
     // 否则 seek 目标算错 / seek 没生效时，下一轮轮询又会命中同一段，
     // 变成每 2 秒 seek 一次、无限弹「已跳过广告」的死循环。
     let adSkipLocked = -1;
+    // 片尾广告的 8 秒兜底定时器；换集/换源时必须清掉，否则会在新一集开头再切一次集。
+    let tailSkipTimer = null;
 
     function adRangeIndexAt(pos) {
       const ranges = window.__adRanges;
@@ -3943,8 +3945,14 @@
       // 8 秒内位置没有往前走，就当作本集已播完，直接进下一集（暂停中则不动，避免误切）。
       if (ranges[i][3] === 1) {
         const from = pos;
-        setTimeout(() => {
+        // 记住当下的播放令牌：8 秒内如果已经自动切到下一集（seek 到结尾会立刻 EOF），
+        // 这个定时器必须失效，否则会在新一集开头再触发一次「下一集」——实测 MSE 下会连跳两集。
+        const myToken = playToken;
+        if (tailSkipTimer) { clearTimeout(tailSkipTimer); tailSkipTimer = null; }
+        tailSkipTimer = setTimeout(() => {
+          tailSkipTimer = null;
           try {
+            if (myToken !== playToken) return;   // 已经换集/换源，作废
             if (!document.getElementById('playerView').classList.contains('active')) return;
             const paused = isMpv() ? mpvState.paused : pvVideo.paused;
             if (paused) return;
@@ -4101,6 +4109,7 @@
     async function playEpisode(url, resumeAt = 0) {
       syncCacheUI();
       const token = ++playToken;
+      if (tailSkipTimer) { clearTimeout(tailSkipTimer); tailSkipTimer = null; }
       eofHandled = false;
       sawProgress = false;
       // 清空上一集残留的位置/时长，避免新文件加载前被误判成「已到片尾」
