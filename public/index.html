@@ -2579,7 +2579,16 @@
           }
           showSourceWarn(disc);
           if (!disc || silent) return;
-          showToast(`该源有 ${disc} 处时间戳重置，已用兼容模式转封装，声音异常可换源`, 5000);
+          // 文案必须跟「实际在用哪个内核」一致：
+          // MSE 内核从不转封装，旧文案「已用兼容模式转封装」会让人误以为偷偷起了 ffmpeg。
+          const engine = engineMode();
+          if (engine === 'mse') {
+            showToast(`该源有 ${disc} 处时间戳重置，网页内核(MSE)可能声音异常；切到 mpv 内核可避免`, 5500);
+          } else if (compatEnabled()) {
+            showToast(`该源有 ${disc} 处时间戳重置，已用兼容模式转封装，声音异常可换源`, 5000);
+          } else {
+            showToast(`该源有 ${disc} 处时间戳重置，网页播放可能出现声音异常；可开启兼容模式或切 mpv`, 5500);
+          }
         })
         .catch(() => {});
     }
@@ -4762,8 +4771,13 @@
       const box = document.getElementById('srcWarn');
       const txt = document.getElementById('srcWarnText');
       if (!box || !txt) return;
-      if (!disc || disc <= 0 || isMpv() || compatEnabled()) { box.style.display = 'none'; return; }
-      txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
+      if (!disc || disc <= 0 || isMpv()) { box.style.display = 'none'; return; }
+      const engine = engineMode();
+      // 「ffmpeg (兼容)」模式下脏流会自动转封装，不需要提示；其它内核如实提示
+      if (engine !== 'mse' && compatEnabled()) { box.style.display = 'none'; return; }
+      txt.textContent = engine === 'mse'
+        ? `该源封装有 ${disc} 处时间戳重置，网页内核(MSE)可能出现声音异常；切到 mpv 内核可避免。`
+        : `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
       box.style.display = 'flex';
     }
 
