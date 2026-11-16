@@ -1356,13 +1356,13 @@
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
             拦截插播广告（默认开启；按区间自动跳过）
           </label>
-          <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢">
+          <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢。对 mpv / 兼容 / 网页(MSE) 三个内核都生效">
             缓冲
             <select id="cacheSel" class="ctrl-rate" onchange="saveCacheLevel(this.value)" style="width:auto">
               <option value="15">小（15 秒）</option>
-              <option value="30" selected>中（30 秒）</option>
+              <option value="30">中（30 秒）</option>
               <option value="60">大（60 秒）</option>
-              <option value="120">超大（120 秒）</option>
+              <option value="120" selected>超大（120 秒，默认）</option>
               <option value="180">3 分钟（180 秒）</option>
               <option value="240">4 分钟（240 秒）</option>
               <option value="300">5 分钟（300 秒）</option>
@@ -3624,9 +3624,9 @@
        网络差就调大（牺牲起播速度换稳定），网络好可以调小。 */
     function cacheSecs() {
       try {
-        const v = Number(localStorage.getItem('tvbox_cache') || 30);
-        return [15, 30, 60, 120, 180, 240, 300].includes(v) ? v : 30;
-      } catch (e) { return 30; }
+        const v = Number(localStorage.getItem('tvbox_cache') || 120);
+        return [15, 30, 60, 120, 180, 240, 300].includes(v) ? v : 120;
+      } catch (e) { return 120; }
     }
     window.kimboxCacheSecs = cacheSecs;
     function saveCacheLevel(v) {
@@ -4307,9 +4307,10 @@
               enableWorker: true,
               lowLatencyMode: false,
               startFragPrefetch: true,
-              maxBufferLength: 120,
-              maxMaxBufferLength: 240,
-              maxBufferSize: 120 * 1000 * 1000,
+              // 跟随「缓冲」下拉（默认 120 秒），三个内核语义一致
+              maxBufferLength: cacheSecs(),
+              maxMaxBufferLength: cacheSecs() * 2,
+              maxBufferSize: cacheSecs() * 1000 * 1000,
               maxBufferHole: 0.5,
               backBufferLength: 90,
               fragLoadingMaxRetry: 6,
@@ -5364,4 +5365,5 @@
 
 </body>
 </html>
+
 
