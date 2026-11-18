@@ -1235,8 +1235,8 @@
       <div class="pv-spacer"></div>
       <span class="engine-label">引擎</span>
       <select class="ctrl-rate engine-sel" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
-        <option value="mse">网页 (MSE，默认)</option>
-        <option value="mpv">mpv 内核</option>
+        <option value="mpv">mpv（默认）</option>
+        <option value="mse">网页 (MSE)</option>
         <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
@@ -1372,10 +1372,10 @@
 
 
 
-        <div class="row-label" id="engineRowLabel">播放引擎（默认网页 MSE；源起不来时切 mpv）：</div>
+        <div class="row-label" id="engineRowLabel">播放引擎（默认 mpv；想更顺滑可切网页 MSE）：</div>
         <div class="source-tabs" id="engineBtns">
-          <div class="source-tab" data-engine="mse" onclick="changeEngine('mse')">网页 (MSE，默认)</div>
-          <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核</div>
+          <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（默认）</div>
+          <div class="source-tab" data-engine="mse" onclick="changeEngine('mse')">网页 (MSE)</div>
           <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">ffmpeg (兼容)</div>
         </div>
 
@@ -2607,9 +2607,9 @@
         const v = localStorage.getItem('tvbox_engine');
         if (v === 'mpv' || v === 'mse' || v === 'browser') return v;
       } catch (e) {}
-      // 默认「网页 (MSE)」：走浏览器原生解码，画面最顺、CPU 最省；
-      // 个别源在 MSE 下起不来（跨域/证书/编码），手动切 mpv 即可，选择会被记住。
-      return 'mse';
+      // 未设置时：桌面版默认 mpv 内核（音频稳、字幕/音轨控制全），浏览器版默认浏览器引擎。
+      // 「网页 (MSE)」是可选项：画面更顺、CPU 更省，但遇到跨域/证书异常的源可能起不来。
+      return (window.kimbox && window.kimbox.isElectron) ? 'mpv' : 'browser';
     }
     function isMpv() { return engineMode() === 'mpv'; }
 
