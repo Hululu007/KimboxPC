@@ -168,6 +168,28 @@
     select#siteSelect { max-width: 160px; min-width: 110px; }
 
     /* 分类标签栏 */
+    /* 虫包站点的筛选项（来自 homeContent.filters） */
+    .filter-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px 24px 4px;
+    }
+    .filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .filter-name { color: var(--text-muted); font-size: 12px; min-width: 42px; }
+    .filter-chip {
+      font-size: 12px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.06);
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .filter-chip:hover { background: rgba(255,255,255,.12); color: #fff; }
+    .filter-chip.active { background: var(--accent); color: #fff; font-weight: 600; }
+
     .tabs-bar {
       padding: 10px 24px;
       background: var(--card-bg);
@@ -1123,6 +1145,8 @@
     <div class="tab-item" onclick="showFavorites(this)">⭐ 收藏</div>
     <div class="tab-item" onclick="showHistory(this)">🕘 历史</div>
   </div>
+
+  <div class="filter-bar" id="filterBar" style="display:none"></div>
 
   <div class="list-toolbar" id="listToolbar">
     <span id="listToolbarText"></span>
@@ -2234,6 +2258,10 @@
         body: JSON.stringify({ siteKey })
       });
       activeSiteKey = siteKey;
+      // 换站点：清掉上一个站点的筛选条件（虫包站的 filters 各不相同）
+      spiderFilters = {};
+      spiderFilterSel = {};
+      renderFilterBar('');
       loadHome();
     }
 
@@ -2259,6 +2287,44 @@
       }
     }
 
+    /* ---------- 虫包筛选（filters → extend） ---------- */
+    let spiderFilters = {};      // { tid: [ {key,name,value:[{n,v}]} ] }
+    let spiderFilterSel = {};    // { tid: {key: v} }
+
+    function renderFilterBar(tid) {
+      const bar = document.getElementById('filterBar');
+      if (!bar) return;
+      const groups = (spiderFilters && spiderFilters[String(tid)]) || [];
+      if (!groups.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+      const sel = spiderFilterSel[String(tid)] || {};
+      bar.innerHTML = groups.map(g => {
+        const cur = sel[g.key] || '';
+        const chip = (label, val, active) =>
+          `<span class="filter-chip${active ? ' active' : ''}" onclick="setSpiderFilter('${tid}','${g.key}','${String(val).replace(/'/g, "\\'")}')">${escapeHtml(label)}</span>`;
+        const chips = [chip('全部', '', cur === '')]
+          .concat((g.value || []).map(v => chip(v.n || v.v, v.v, cur === String(v.v))));
+        return `<div class="filter-row"><span class="filter-name">${escapeHtml(g.name)}</span>${chips.join('')}</div>`;
+      }).join('');
+      bar.style.display = 'flex';
+    }
+
+    function setSpiderFilter(tid, key, val) {
+      const t = String(tid);
+      spiderFilterSel[t] = spiderFilterSel[t] || {};
+      if (val === '') delete spiderFilterSel[t][key];
+      else spiderFilterSel[t][key] = val;
+      renderFilterBar(t);
+      const activeTab = document.querySelector('#categoryTabs .tab-item.active');
+      loadCategory(tid, activeTab, true);
+    }
+
+    function spiderExtendQuery(tid) {
+      const sel = spiderFilterSel[String(tid)] || {};
+      const keys = Object.keys(sel);
+      if (!keys.length) return '';
+      return '&extend=' + encodeURIComponent(JSON.stringify(sel));
+    }
+
     async function loadHome() {
       hideToolbar();
       listState = { mode: 'category', kind: null, tid: '', page: 1, pagecount: 1, loading: true, total: 0 };
@@ -2273,6 +2339,8 @@
         listState.total = data.total || (data.list || []).length;
         window.__homeSiteKey = siteAtStart;          // 记录这份列表属于哪个站点
         renderCategories(data.classes || []);
+        spiderFilters = (data && data.filters) || {};   // 虫包站点才有
+        renderFilterBar('');
         renderVideos(data.list || [], false);
         updateFooter();
         maybeLoadMore();
@@ -2391,13 +2459,14 @@
       const siteAtStart = activeSiteKey;
       showStatus('加载分类中...');
       try {
-        const resp = await fetch(`/api/category?tid=${tid}&pg=1`);
+        const resp = await fetch(`/api/category?tid=${tid}&pg=1${spiderExtendQuery(tid)}`);
         const data = await resp.json();
         if (siteAtStart !== activeSiteKey) return;   // 请求期间切了站点，丢弃结果
         listState.pagecount = data.pagecount || 1;
         listState.total = data.total || (data.list || []).length;
         listState.loading = false;
         renderVideos(data.list || [], false);
+        renderFilterBar(tid);
         updateFooter();
         maybeLoadMore();
       } catch (e) {
@@ -2415,7 +2484,7 @@
       const next = listState.page + 1;
       setFooter(`正在加载第 ${next} / ${listState.pagecount} 页...`);
       try {
-        const resp = await fetch(`/api/category?tid=${listState.tid}&pg=${next}`);
+        const resp = await fetch(`/api/category?tid=${listState.tid}&pg=${next}${spiderExtendQuery(listState.tid)}`);
         const data = await resp.json();
         listState.page = next;
         listState.pagecount = data.pagecount || listState.pagecount;

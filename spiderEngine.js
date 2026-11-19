@@ -210,7 +210,7 @@ async function category(site, tid, page = 1, extend, jar) {
   try {
     const data = parseJson(await callWithRetry(site, jar, {
       method: 'categoryContent',
-      params: { tid: String(tid), pg: String(page), filter: 'true', extend: extend ? JSON.stringify(extend) : '' },
+      params: { tid: String(tid), pg: String(page), filter: 'true', extend: extend ? (typeof extend === 'string' ? extend : JSON.stringify(extend)) : '' },
       timeoutMs: 60000
     }));
     const list = (data && Array.isArray(data.list)) ? data.list : [];
