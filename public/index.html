@@ -1713,6 +1713,13 @@
             : (s.installed ? '未启动（首次使用虫包站源时自动启动）' : '运行时缺失（需 tools\\fetch-jvm.ps1）')) + pl;
         }
         if (window.__siteList) renderSiteOptions(window.__siteList, activeSiteKey);
+        // 启动预加载跑完后提示一次（每个进程会话只提示一次）
+        const p = s.preload || {};
+        if (p.total > 0 && !p.running && !window.__preloadNotified) {
+          window.__preloadNotified = true;
+          if (p.failed === 0) showToast(`虫包站源已就绪：${p.ok}/${p.total} 个可用`, 3200);
+          else showToast(`虫包站源：${p.ok}/${p.total} 个可用，${p.failed} 个加载失败（设置里可重启服务）`, 5000);
+        }
         // 启动时 JVM 与预加载是异步起来的：只要「还没起来」或「预加载没跑完」就继续轮询，
         // 最多 12 次（约 30 秒），避免页面停在「未启动」的旧快照上。
         const needPoll = (s.preload && s.preload.running) || (!s.running && s.installed);
