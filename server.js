@@ -969,7 +969,7 @@ const probeCache = new Map();
  * 探测 m3u8 的封装质量：跨越 DISCONTINUITY 时时间戳会重置，
  * hls.js 需要重建时间轴，浏览器音频渲染偶发判错 → 声音变调/发闷。
  */
-async function probePlaylist(url, depth = 0) {
+async function probePlaylist(url, headers, depth = 0) {
   if (!/\.m3u8/i.test(url)) return null;
   if (probeCache.has(url)) return probeCache.get(url);
   let res;
@@ -977,7 +977,7 @@ async function probePlaylist(url, depth = 0) {
     const r = await axios.get(url, {
       timeout: 12000,
       responseType: 'text',
-      headers: { 'User-Agent': DESKTOP_UA }
+      headers: requestHeaders(headers)
     });
     const t = String(r.data || '');
 
@@ -999,7 +999,7 @@ async function probePlaylist(url, depth = 0) {
         let abs;
         try { abs = new URL(variant, url).href; } catch (e) { abs = ''; }
         if (abs) {
-          const sub = await probePlaylist(abs, depth + 1);
+          const sub = await probePlaylist(abs, headers, depth + 1);
           if (sub && !sub.error) {
             sub.master = true;
             probeCache.set(url, sub);
@@ -1210,9 +1210,11 @@ function axiosFinalUrl(r, fallback) {
   return fallback;
 }
 
-async function fetchPlaylistMaybeMaster(url) {
+async function fetchPlaylistMaybeMaster(url, headers) {
   const fetchText = async (u) => {
-    const r = await axios.get(u, { timeout: 15000, responseType: 'text', headers: { 'User-Agent': DESKTOP_UA } });
+    // 虫包给的地址常要求 Referer/Origin（瓜子缺 Referer 会被 302 到一个 20 秒广告占位列表），
+    // 所以这里必须带上调用方传进来的头，而不是只给桌面 UA。
+    const r = await axios.get(u, { timeout: 15000, responseType: 'text', headers: requestHeaders(headers) });
     return { text: String(r.data || ''), finalUrl: axiosFinalUrl(r, u) };
   };
 
@@ -1388,11 +1390,35 @@ app.get('/api/hls', async (req, res) => {
   // mode=cut：剪辑模式（删广告块）；默认 skip：保留原列表，播放时跳过
   const useCut = String(req.query.mode || '').toLowerCase() === 'cut';
   try {
-    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+    const extraHeaders = parseHeaderParam(req.query.headers);
+    let { text, finalUrl } = await fetchPlaylistMaybeMaster(url, extraHeaders);
     if (!/#EXTINF/i.test(text)) return res.status(502).json({ error: '不是有效的媒体播放列表' });
 
-    const abs = absolutizePlaylist(text, finalUrl);
-    const analysis = analyzeAdRanges(abs);
+    let abs = absolutizePlaylist(text, finalUrl);
+    let analysis = analyzeAdRanges(abs);
+
+    // 部分源（实测瓜子）会间歇性把 m3u8 换成「20 秒广告占位页」并 302 到别的域名，
+    // 表现就是点开只播十几秒。列表短到离谱时重取几次，挑最长的那份。
+    if (Object.keys(extraHeaders).length && analysis.duration > 0 && analysis.duration < 30) {
+      for (let i = 0; i < 3; i++) {
+        await new Promise(r => setTimeout(r, 350));
+        try {
+          const again = await fetchPlaylistMaybeMaster(url, extraHeaders);
+          if (!/#EXTINF/i.test(again.text)) continue;
+          const abs2 = absolutizePlaylist(again.text, again.finalUrl);
+          const a2 = analyzeAdRanges(abs2);
+          if (a2.duration > analysis.duration) { finalUrl = again.finalUrl; abs = abs2; analysis = a2; }
+        } catch (e) {}
+        if (analysis.duration >= 30) break;
+      }
+      if (analysis.duration < 30) {
+        return res.status(502).json({
+          error: '源返回的是广告/占位播放列表（仅 ' + Math.round(analysis.duration) + ' 秒），稍后重试或换源',
+          short: true,
+          source: finalUrl
+        });
+      }
+    }
     const token = crypto.randomBytes(8).toString('hex');
 
     let served = abs;
@@ -1407,7 +1433,6 @@ app.get('/api/hls', async (req, res) => {
 
     // 虫包地址的 CDN 多半不带 CORS 头：有附加请求头时，把分片/密钥也改写成同源代理，
     // 否则 hls.js 在浏览器里会「列表能读、分片全挂」。mpv 走代理也只是多一跳本地转发。
-    const extraHeaders = parseHeaderParam(req.query.headers);
     if (Object.keys(extraHeaders).length) served = proxyUris(served, extraHeaders);
 
     pruneHlsCache();
