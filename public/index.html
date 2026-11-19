@@ -1141,9 +1141,9 @@
 
   <!-- 分类栏 -->
   <div class="tabs-bar" id="categoryTabs">
-    <div class="tab-item active">首页推荐</div>
     <div class="tab-item" onclick="showFavorites(this)">⭐ 收藏</div>
     <div class="tab-item" onclick="showHistory(this)">🕘 历史</div>
+    <div class="tab-item active">首页推荐</div>
   </div>
 
   <div class="filter-bar" id="filterBar" style="display:none"></div>
@@ -2192,7 +2192,7 @@
           } else {
             document.getElementById('siteSelect').innerHTML = '<option value="">(未加载站点)</option>';
             document.getElementById('categoryTabs').innerHTML =
-              '<div class="tab-item active">首页推荐</div><div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div>';
+              '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
             document.getElementById('videoGrid').innerHTML = '';
             document.getElementById('videoGrid').style.display = 'none';
             setFooter('');
@@ -2259,7 +2259,7 @@
         document.getElementById('siteSelect').innerHTML = '<option value="">(未加载站点)</option>';
         document.getElementById('configSelect').innerHTML = '<option value="">(还没有配置源)</option>';
         document.getElementById('categoryTabs').innerHTML =
-          '<div class="tab-item active">首页推荐</div><div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div>';
+          '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
         document.getElementById('videoGrid').innerHTML = '';
         document.getElementById('videoGrid').style.display = 'none';
         setFooter('');
@@ -2403,15 +2403,17 @@
         return item;
       };
 
-      mk('首页推荐', (el) => { setActiveTab(el); loadHome(); });
+      // 顺序：收藏 → 历史 → 首页推荐 → 分类（收藏/历史放最左）
       mk('⭐ 收藏', (el) => showFavorites(el));
       mk('🕘 历史', (el) => showHistory(el));
+      const homeTab = mk('首页推荐', (el) => { setActiveTab(el); loadHome(); });
 
       classes.forEach(c => {
         mk(c.type_name, (el) => loadCategory(c.type_id, el));
       });
 
-      bar.querySelector('.tab-item').classList.add('active');
+      // 默认高亮「首页推荐」，而不是最左边的「收藏」
+      homeTab.classList.add('active');
       fitTabs();
     }
 
