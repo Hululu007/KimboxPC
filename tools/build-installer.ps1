@@ -50,7 +50,11 @@ $must = @(
     'native\lib\libmpv-2.dll',
     'native\build\Release\mpv_native.node',
     'public\index.html',
-    'icon.ico'
+    'icon.ico',
+    'jvm\companion-service.jar',
+    'jvm\bcprov-jdk18on-1.78.1.jar',
+    'jvm\lib-unidbg',
+    'runtime\jre\bin\java.exe'
 )
 foreach ($m in $must) {
     if (-not (Test-Path (Join-Path $appDir $m))) {

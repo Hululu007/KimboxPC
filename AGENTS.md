@@ -44,6 +44,7 @@ KimBoxPC-桌面版.bat
 
 - **前端没有任何打包步骤**：`public/index.html` 是手写单文件，CSS 与 JS 都内联在 `<script>` 里，配 `public/vendor/hls.min.js`、`public/vendor/mpegts.js`。改完刷新窗口即可，不需要 build。
 - **播放链路**：libmpv（`MPV_RENDER_API_TYPE_SW`）→ 内存帧 → IPC `mpv:frame` → `<canvas>`；音频由 mpv 直连声卡，**不经过浏览器 MSE**。约 30fps（33ms 间隔）推帧。
+- **虫包（JVM 站源）**：`type:3` 站点（`api` 以 `csp_` 开头）由 `jvmBridge.js` 拉起 `jvm/companion-service.jar`（xiugou-tv 的 android-bridge 产物）在 `127.0.0.1:<随机端口>` 提供 `/spider/{load,call,reset}`，`spiderEngine.js` 把它翻译成我们的站点模型。启动参数必须带 `-noverify`（dex2jar 产物缺 stackmap，会 VerifyError 降级成 SpiderNull）、`-Dfile.encoding=UTF-8`、`--stdin-watch=on`、`--parent-pid=<pid>`，缓存目录用 `-Duser.home=data/jvm/home` 重定向。运行时不入 git（`jvm/`、`runtime/`），用 `tools\fetch-jvm.ps1` 拷入。
 - **三内核**：默认 `mpv`；`网页 (MSE)`（`mse`）作为可选（更顺滑/更省 CPU）；`ffmpeg (兼容)` 走 `/api/remux`（`ffmpeg -c copy` 转 MPEG-TS 直出给 hls/mpegts.js），用于规避 HLS `DISCONTINUITY` 时间戳重置导致的音频变调；`网页 (MSE)` 强制 hls.js + 浏览器原生解码（大缓冲、Worker），画面最顺但无法矫正脏源音频，依赖本地代理同源。引擎值存 `tvbox_engine`（`mpv` / `mse` / `browser`）。
 - **播放列表代理**（`/api/hls`）：开启广告拦截时，前端不再把 CDN 地址直接交给播放器，而是让本地服务拉一次 m3u8、把分片与 `URI="..."` 改写成绝对地址后缓存，再用 `/api/hls/<token>.m3u8` 喂给播放器 —— 这样「分析用的列表」和「播放用的列表」是同一份字节。原因：部分 CDN 每次请求插播的广告位置都不同（实测同一地址连拉 4 次得到 4 组时长序列），先分析后播放会错位。代理失败才退回直连 + `/api/ads`。
 - **运行状态是模块级单例**：`server.js` 顶部的 `state`（configId / url / sites / activeSite / sitesVersion）。单进程单用户假设贯穿全局，不要引入需要多实例并发的写法。
@@ -72,6 +73,7 @@ data/                     全目录被 .gitignore，是用户真实数据
 - **广告跳过**（`server.js analyzeAdRanges()` + 前端 `maybeSkipAd()`）：不改播放列表，只算区间。把 m3u8 按 `#EXT-X-DISCONTINUITY` 切块，挑「夹在两侧长正片之间、5~90 秒、1~30 片」的短块；命中数 >6 或广告总时长 >5% 就整体放弃（更可能是整集切片）。区间按**正片 PTS 累计**（广告段不计入）计算，返回 `[start, end, target]`，**`target` 必须是 `end + 0.4`（广告块之后），绝不能落在 `[start, end)` 内**——否则 seek 回来还在广告里，每轮轮询都重新命中，界面会无限弹「已跳过广告」。首尾块另按「与已识别广告相同的分片数 + 时长」特征匹配，仅当特征一致才认定（避免误切片尾字幕）；片尾广告的区间带第 4 项标记 `1`，前端对它直接跳 `duration - 0.5`（此处显示时间轴与 PTS 已错位，按时长累加算出的目标点会被 mpv 忽略）。前端另有单段锁 `adSkipLocked` 兜底。**这个 PTS 假设是整个算法的地基**，改切块或计时逻辑前先想清楚时间轴。
 - **广告处理方式（两种，互不影响）**：`:mode=skip`（默认）保留原列表、运行时跳过；`mode=cut` 由服务端把广告块整块删掉再交给播放器（拼接处保留一个 discontinuity），返回 `cuts`/`removedSeconds`，前端不再设跳过区间。剪辑会缩短时间轴，历史与片头片尾按当前方式记录——同一集在两种方式间切换，续播点可能有几十秒偏移；直播流只能用 skip。
 - **mpv 时间轴偏移**（`electron/main.js` `mpv:state`）：mpv 的原始 `time-pos` 跨 `DISCONTINUITY` 会回零，而 UI 需要绝对秒数，所以维护 `timeOffset`（跳变 >15s 且不在自 seek 豁免期内才更新）。另用 `lastKnownPosition` 记忆最远位置，`ended` 必须同时满足「eof/idle」+「位置接近结尾 30s 内」，否则中途插播会被误判为播完而跳下一集。
+- **虫包请求头**：`playerContent` 返回的 `header`（Referer/Origin 等）必须带到「代理取列表、分片、播放器」三处，否则 CDN 403；CDN 无 CORS 时 `/api/hls` 会把分片/密钥改写成 `/api/seg` 同源代理，否则 MSE 只拿到列表、分片全挂。相关入口：前端 `mediaHeaders`、`/api/hls` 的 `headers` 参数、mpv 的 `http-header-fields`、hls.js 的 `xhrSetup`。
 - **安全边界**：配置源 URL、`ext`、m3u8 内容都来自第三方。所有网络请求带桌面 UA、有超时；`innerHTML` 写入前必须 `escapeHtml()`；备份/还原路径必须过校验；日志里**不要打印完整配置源地址**（已有先例：只打 `name` 或 hostname）。
 
 ---
@@ -136,5 +138,6 @@ npm run app    # 首页加载 → 搜索 → 详情 → mpv 播放/拖动 → �
 | Electron 窗口、IPC、摸鱼键、帧推送 | `electron/main.js`、`electron/preload.js` |
 | libmpv 渲染 / 解码参数 | `native/src/mpv_native.cpp`（改后需重编） |
 | 外部播放器探测与拉起 | `playerLauncher.js` |
+| 虫包站源（JVM 桥、协议适配、许可证） | `jvmBridge.js`、`spiderEngine.js`、`jvm/`、`tools\fetch-jvm.ps1` |
 | 打包 / 环境修复 / 快捷方式 | `tools\*.ps1`、根目录 `.bat` |
 

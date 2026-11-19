@@ -1,4 +1,4 @@
-﻿# KimBoxPC 运行环境体检 / 修复
+# KimBoxPC 运行环境体检 / 修复
 # 用法：双击「修复运行环境.bat」
 
 $ErrorActionPreference = 'Continue'
@@ -34,7 +34,10 @@ $must = @(
     'native\lib\vulkan-1.dll',
     'native\build\Release\mpv_native.node',
     'public\index.html',
-    'ffmpeg\ffmpeg.exe'
+    'ffmpeg\ffmpeg.exe',
+    'jvm\companion-service.jar',
+    'jvm\bcprov-jdk18on-1.78.1.jar',
+    'runtime\jre\bin\java.exe'
 )
 $missing = @()
 foreach ($m in $must) {

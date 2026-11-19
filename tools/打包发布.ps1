@@ -42,7 +42,9 @@ $must = @(
   'public\index.html',
   'KimBoxPC-桌面版.bat',
   '创建快捷方式.bat',
-  'icon.ico'
+  'icon.ico',
+  'jvm\companion-service.jar',
+  'runtime\jre\bin\java.exe'
 )
 foreach ($m in $must) {
   if (-not (Test-Path (Join-Path $pkgDir $m))) {

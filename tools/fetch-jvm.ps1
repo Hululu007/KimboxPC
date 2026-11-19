@@ -60,6 +60,26 @@ Copy-Item $srcUnidbg (Join-Path $jvm 'lib-unidbg') -Recurse -Force
 if (Test-Path $jre) { Remove-Item -Recurse -Force $jre }
 Copy-Item $srcJre $jre -Recurse -Force
 
+# 3) 随包许可（GPLv3）与来源说明：必须与二进制一起分发
+$licenseSrc = Join-Path $Source 'LICENSE'
+if (Test-Path $licenseSrc) {
+    Copy-Item $licenseSrc (Join-Path $jvm 'LICENSE-GPLv3.txt') -Force
+}
+$notice = @"
+三  JVM 站源运行时（第三方组件）
+--------------------------------
+上游：xiugou-tv  https://github.com/KuekHaoYang/xiugou-tv
+版本：v1.12.5（commit f8858b5）
+许可：GNU GPL v3（全文见同目录 LICENSE-GPLv3.txt）
+内容：
+  companion-service.jar      android-bridge + catvod 契约 + dex2jar + 加固壳解包
+  bcprov-jdk18on-1.78.1.jar  BouncyCastle（Android 加解密语义对齐）
+  lib-unidbg/*.jar           unidbg（ARM 模拟，用于 ftyguard/wexguard 解壳）
+本目录文件由本脚本从本地构建产物原样拷贝，未作修改。
+对应源码可从上游仓库获取；如需分发，请一并提供上述组件的源码或获取方式。
+"@
+[System.IO.File]::WriteAllText((Join-Path $jvm 'NOTICE.txt'), $notice, (New-Object System.Text.UTF8Encoding($true)))
+
 # 3) 校验（只核对主 jar 与 BouncyCastle 的 sha256，目录类组件看体积）
 function Get-Sha256([string]$p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower() }
 $manifestPath = Join-Path $root 'jvm-manifest.json'
