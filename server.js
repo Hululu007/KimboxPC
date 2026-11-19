@@ -32,6 +32,29 @@ function readPort() {
 const PORT = readPort();
 const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// 虫包（TVBox spider）常给播放地址附带 Referer/Origin，否则 CDN 直接 403。
+// 前端把这些头以 ?headers=<JSON> 传进来，这里统一清洗后合并到请求里。
+// 只允许业务头，禁止 Host / Content-Length 之类的传输层头，长度也设上限。
+const HEADER_ALLOW = ['referer', 'origin', 'user-agent', 'cookie', 'accept', 'accept-language', 'authorization', 'x-requested-with'];
+function parseHeaderParam(raw) {
+  if (!raw) return {};
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!obj || typeof obj !== 'object') return {};
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const key = String(k).toLowerCase();
+      if (!HEADER_ALLOW.includes(key)) continue;
+      const val = String(v == null ? '' : v).replace(/[\r\n]/g, ' ').slice(0, 2048);
+      if (val) out[k] = val;
+    }
+    return out;
+  } catch (e) { return {}; }
+}
+function requestHeaders(extra) {
+  return Object.assign({ 'User-Agent': DESKTOP_UA }, parseHeaderParam(extra));
+}
+
 // 记录进程号，供 stop.bat 精确停止（避免残留后台进程锁住数据库）
 const PID_FILE = path.join(__dirname, 'data', '.server.pid');
 function writePid() {
@@ -948,13 +971,26 @@ app.get('/api/probe', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!url) return res.status(400).json({ error: '缺少 url 参数' });
 
-  res.json(await probePlaylist(url) || {});
+  res.json(await probePlaylist(url, parseHeaderParam(req.query.headers)) || {});
 });
 
 /* ==================== 播放列表广告过滤 ==================== */
 // 常见插播方式：主内容 | DISC | 短广告块(10~60s) | DISC | 主内容。
 // 这里在开播前把「被一对 discontinuity 夹住的短块」整块剔除，
 // 播放器拿到的就是干净流，不会中途被打断。
+
+/** 把列表里的分片与密钥 URI 改写成 /api/seg 代理（只在需要附加头时启用） */
+function proxyUris(text, headers) {
+  const enc = (u) => '/api/seg?u=' + encodeURIComponent(u) + (Object.keys(headers).length ? '&h=' + encodeURIComponent(JSON.stringify(headers)) : '');
+  return text.split(/\r?\n/).map(line => {
+    const s = line.trim();
+    if (!s) return line;
+    if (s.startsWith('#')) {
+      return line.replace(/URI="([^"]+)"/g, (m, u) => 'URI="' + enc(u) + '"');
+    }
+    return /^https?:\/\//i.test(s) ? enc(s) : line;
+  }).join('\n');
+}
 
 function splitByDiscontinuity(text) {
   const lines = text.split(/\r?\n/);
@@ -1167,7 +1203,7 @@ app.get('/api/ads', async (req, res) => {
   const hit = adRangesCache.get(url);
   if (hit && Date.now() - hit.ts < 5 * 60 * 1000) return res.json(hit);
   try {
-    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url);
+    const { text, finalUrl } = await fetchPlaylistMaybeMaster(url, parseHeaderParam(req.query.headers));
     const r = analyzeAdRanges(text);
     const out = { ...r, finalUrl, ts: Date.now() };
     adRangesCache.set(url, out);
@@ -1312,6 +1348,11 @@ app.get('/api/hls', async (req, res) => {
       }
     }
 
+    // 虫包地址的 CDN 多半不带 CORS 头：有附加请求头时，把分片/密钥也改写成同源代理，
+    // 否则 hls.js 在浏览器里会「列表能读、分片全挂」。mpv 走代理也只是多一跳本地转发。
+    const extraHeaders = parseHeaderParam(req.query.headers);
+    if (Object.keys(extraHeaders).length) served = proxyUris(served, extraHeaders);
+
     pruneHlsCache();
     hlsCache.set(token, { text: served, ts: Date.now(), url: finalUrl });
 
@@ -1334,6 +1375,35 @@ app.get('/api/hls', async (req, res) => {
     });
   } catch (e) {
     res.status(502).json({ error: e.message });
+  }
+});
+
+/**
+ * 分片代理：虫包的 CDN 通常不带 CORS 头，浏览器里 hls.js 直接拉分片会被拦。
+ * 把列表里的分片与密钥改写成 /api/seg?... 后，MSE 就变成同源请求了。
+ * mpv 走这条路也没问题（只是多一次本地转发）。
+ */
+app.get('/api/seg', async (req, res) => {
+  const target = String(req.query.u || '').trim();
+  if (!/^https?:\/\//i.test(target)) return res.status(400).send('bad url');
+  try {
+    const headers = requestHeaders(req.query.h);
+    const range = req.headers.range;
+    if (range) headers.Range = range;
+    const r = await axios.get(target, {
+      timeout: 30000,
+      responseType: 'stream',
+      headers,
+      maxRedirects: 5,
+      validateStatus: () => true
+    });
+    res.status(r.status === 206 ? 206 : 200);
+    for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control']) {
+      if (r.headers[k]) res.setHeader(k, r.headers[k]);
+    }
+    r.data.pipe(res);
+  } catch (e) {
+    res.status(502).send('segment fetch failed');
   }
 });
 

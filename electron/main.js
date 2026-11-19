@@ -680,6 +680,16 @@ ipcMain.handle('mpv:open', (evt, payload) => {
       native.setProp(i, 'demuxer-max-back-bytes', String(Math.round(maxBytes / 2)));
     } catch (e) {}
 
+    // 虫包（TVBox spider）给的播放地址常校验 Referer/Origin，必须在 loadfile 之前设给 mpv。
+    // 每次 open 都显式设置（空则清空），避免上一条流的头残留到下一条。
+    try {
+      const hs = (payload && payload.headers) || null;
+      const fields = hs && typeof hs === 'object'
+        ? Object.entries(hs).map(([k, v]) => `${k}: ${String(v).replace(/[\r\n]/g, ' ')}`).join(',')
+        : '';
+      native.setProp(i, 'http-header-fields', fields);
+    } catch (e) {}
+
     // 续播定位用 start 选项（loadfile 的第 4 个参数在 IPC 里不接受字符串，会报 invalid parameter）
     const s = Math.floor(Number(start) || 0);
     if (s > 0) native.setProp(i, 'start', String(s));

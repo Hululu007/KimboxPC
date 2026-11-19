@@ -69,6 +69,24 @@ function basePayload(site, jar) {
   return { siteKey: site.key, api: site.api, ext: site.ext || '', jar: jar || '' };
 }
 
+/** 需要重试的阶段：站源自身偶发失败（超时/上游 5xx/临时拒绝），换个时机大概率能成；
+ *  下载/解壳/转换失败重试也没用，直接抛给用户。 */
+const RETRY_STAGES = ['', 'call', 'upstream', 'timeout', 'empty'];
+
+async function callWithRetry(site, jar, opts, attempts = 2) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await bridge.callSpider(Object.assign(basePayload(site, jar), opts));
+    } catch (e) {
+      last = e;
+      if (!RETRY_STAGES.includes(e && e.stage)) throw e;
+      if (i + 1 < attempts) await new Promise(r => setTimeout(r, 700 + i * 500));
+    }
+  }
+  throw last;
+}
+
 /** 加载站点（幂等；桥内按 siteKey 缓存） */
 async function ensureLoaded(site, jar) {
   return bridge.loadSite(Object.assign(basePayload(site, jar), { timeoutMs: 180000 }));
@@ -77,11 +95,11 @@ async function ensureLoaded(site, jar) {
 async function search(site, wd, page = 1, jar) {
   await ensureLoaded(site, jar);
   try {
-    const data = parseJson(await bridge.callSpider(Object.assign(basePayload(site, jar), {
+    const data = parseJson(await callWithRetry(site, jar, {
       method: 'searchContent',
       params: { wd: String(wd), quick: 'false', pg: String(page) },
       timeoutMs: 60000
-    })));
+    }));
     const list = (data && Array.isArray(data.list)) ? data.list : [];
     return { list: list.map(toVideoItem) };
   } catch (e) { throw wrapError(e); }
@@ -91,11 +109,11 @@ async function getDetail(site, id, jar) {
   await ensureLoaded(site, jar);
   let data;
   try {
-    data = parseJson(await bridge.callSpider(Object.assign(basePayload(site, jar), {
+    data = parseJson(await callWithRetry(site, jar, {
       method: 'detailContent',
       params: { id: String(id) },
       timeoutMs: 60000
-    })));
+    }));
   } catch (e) { throw wrapError(e); }
   const raw = data && Array.isArray(data.list) ? data.list[0] : null;
   if (!raw) return null;
@@ -133,11 +151,11 @@ async function play(site, flag, id, jar) {
   await ensureLoaded(site, jar);
   let data;
   try {
-    data = parseJson(await bridge.callSpider(Object.assign(basePayload(site, jar), {
+    data = parseJson(await callWithRetry(site, jar, {
       method: 'playerContent',
       params: { flag: String(flag || ''), id: String(id || '') },
       timeoutMs: 60000
-    })));
+    }));
   } catch (e) { throw wrapError(e); }
   if (!data || !data.url) return null;
   return {

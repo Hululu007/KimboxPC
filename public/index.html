@@ -1379,6 +1379,10 @@
           <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">ffmpeg (兼容)</div>
         </div>
 
+        <div class="row-label" id="jvmRowLabel" style="display:none;">站源服务（JVM 虫包）：<span id="jvmStatusText">未启动</span>
+          <button class="secondary" style="margin-left:8px;padding:2px 10px" onclick="restartJvm()">重启服务</button>
+        </div>
+
         <div class="row-label" id="trackRowLabel" style="display:none;">字幕 / 音轨（mpv 模式）：</div>
         <div class="track-row" id="trackRow" style="display:none;">
           <select id="subSel" onchange="changeSubTrack(this.value)" title="字幕"></select>
@@ -1644,8 +1648,13 @@
         const opt = document.createElement('option');
         opt.value = s.key;
         if (s.isDexSpider) {
-          opt.textContent = `🔒 ${s.name} (Android加固虫包)`;
-          opt.disabled = true;
+          // 虫包装载（解壳 + dex2jar）首次要十几秒；JVM 运行时缺失时不可选
+          const jvmOk = !!(window.__jvmStatus && window.__jvmStatus.installed && window.__jvmStatus.enabled);
+          opt.textContent = `🧩 ${s.name} (JVM 虫包)`;
+          opt.disabled = !jvmOk;
+          opt.title = jvmOk
+            ? '虫包站源：首次加载需 10~20 秒（解壳 + 转换），之后走缓存'
+            : 'JVM 运行时缺失或已关闭，虫包站源不可用';
         } else {
           opt.textContent = `📺 ${s.name}${siteLatencyLabel(s.key)}`;
           const p = ping[s.key];
@@ -1664,9 +1673,39 @@
       updateDefaultSiteUI();
     }
 
+    /** 拉取 JVM 站源服务状态：决定虫包站点是否可选、设置面板显示什么 */
+    async function refreshJvmStatus() {
+      try {
+        const s = await (await fetch('/api/jvm/status')).json();
+        window.__jvmStatus = s;
+        const label = document.getElementById('jvmRowLabel');
+        const txt = document.getElementById('jvmStatusText');
+        if (label) label.style.display = (s.spiderSites > 0) ? '' : 'none';
+        if (txt) {
+          txt.textContent = s.running
+            ? `运行中（端口 ${s.port}，冷启动 ${(s.coldStartMs / 1000).toFixed(1)}s）`
+            : (s.installed ? '未启动（首次使用虫包站源时自动启动）' : '运行时缺失（需 tools\\fetch-jvm.ps1）');
+        }
+        if (window.__siteList) renderSiteOptions(window.__siteList, activeSiteKey);
+      } catch (e) {}
+    }
+
+    async function restartJvm() {
+      showToast('正在重启 JVM 站源服务…', 2500);
+      try {
+        const r = await (await fetch('/api/jvm/restart', { method: 'POST' })).json();
+        if (r.error) throw new Error(r.error);
+        showToast('站源服务已重启', 2500);
+      } catch (e) {
+        showToast('重启失败：' + e.message, 5000);
+      }
+      refreshJvmStatus();
+    }
+
     function fillSiteSelect(sites, activeKey) {
       window.__siteList = sites;
       renderSiteOptions(sites, activeKey || activeSiteKey);
+      refreshJvmStatus();
       // 后台测速，完成后带延迟重排（不阻塞启动）
       if (!window.__pinging) {
         window.__pinging = true;
@@ -2549,7 +2588,7 @@
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}`, { signal: ctrl.signal });
+        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}${headersQuery()}`, { signal: ctrl.signal });
         clearTimeout(timer);
         const d = await r.json();
         if (d && d.duration && !currentPlaylistDuration) compat.duration = d.duration;
@@ -2571,7 +2610,7 @@
       window.__probeWarnedUrl = url;
 
       // 现在播放的是「源原始列表」（广告改为播放时跳过），所以按原始统计时长
-      fetch(`/api/probe?url=${encodeURIComponent(url)}`)
+      fetch(`/api/probe?url=${encodeURIComponent(url)}${headersQuery()}`)
         .then(r => r.json())
         .then(d => {
           const disc = d && d.disc ? d.disc : 0;
@@ -2856,7 +2895,7 @@
       });
     }
 
-    async function openMpv(url, startAt = 0) {
+    async function openMpv(url, startAt = 0, headers) {
       destroyCompat();
       if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
       try { pvVideo.pause(); } catch (e) {}
@@ -2877,7 +2916,7 @@
 
         const d = await window.kimbox.open({
           url, title, start: Math.max(0, Math.floor(startAt || 0)), width: w, height: h,
-          cacheSecs: cacheSecs()
+          cacheSecs: cacheSecs(), headers: headers || mediaHeaders || {}
         });
         if (d && d.error) {
           showToast('mpv 启动失败：' + d.error, 5000);
@@ -3860,6 +3899,13 @@
 
     /* ---------- 播放中跳过广告 ---------- */
     // 由 /api/ads 预先给出区间，播到区间内就跳到末尾。不改列表，时间轴不变。
+    // 本次播放的附加请求头：虫包（TVBox spider）常要求 Referer/Origin，否则 CDN 403。
+    // 由 /api/spider/play 返回后写入，所有发往源站的请求（代理/探测/播放器）都带上。
+    let mediaHeaders = {};
+    function headersQuery() {
+      try { return Object.keys(mediaHeaders).length ? '&headers=' + encodeURIComponent(JSON.stringify(mediaHeaders)) : ''; } catch (e) { return ''; }
+    }
+
     let adSkipGuard = 0;
     // 正在跳过的那一段广告（ranges 下标）。跳走后位置必须真的离开该区间才解锁，
     // 否则 seek 目标算错 / seek 没生效时，下一轮轮询又会命中同一段，
@@ -4107,8 +4153,28 @@
       return null;
     }
 
-    async function playEpisode(url, resumeAt = 0) {
+    async function playEpisode(url, resumeAt = 0, opts = {}) {
       syncCacheUI();
+      mediaHeaders = (opts && opts.headers) || {};
+      // 虫包（TVBox spider）站点：详情里给的是播放 id，真正地址要现问站源，
+      // 顺带拿到 CDN 要求的 Referer/Origin 等请求头。
+      if (currentDetail && currentDetail.spider && url && !DIRECT_MEDIA_RE.test(url)) {
+        const src = currentDetail.playSources[currentSourceIdx] || {};
+        const flag = src.flag || src.sourceName || '';
+        const siteKey = currentDetail.siteKey || activeSiteKey;
+        try {
+          const r = await (await fetch(`/api/spider/play?siteKey=${encodeURIComponent(siteKey)}&flag=${encodeURIComponent(flag)}&id=${encodeURIComponent(url)}`)).json();
+          if (r.error || !r.url) throw new Error(r.error || '站源未返回播放地址');
+          if (Number(r.parse) === 1) { showToast('该站源需要网页解析，暂不支持，请换源', 6000); return; }
+          url = r.url;
+          if (r.header) {
+            try { mediaHeaders = JSON.parse(r.header) || {}; } catch (e) { mediaHeaders = {}; }
+          }
+        } catch (e) {
+          showToast('站源起播失败：' + e.message + '（可换源，或看 data/jvm/service.log）', 7000);
+          return;
+        }
+      }
       const token = ++playToken;
       if (tailSkipTimer) { clearTimeout(tailSkipTimer); tailSkipTimer = null; }
       eofHandled = false;
@@ -4187,7 +4253,7 @@
         try {
           // 方式 2「剪辑」：让服务端把广告块删掉；失败则自动退回「跳过」的原有路径
           const wantCut = adMode() === 'cut';
-          const r = await (await fetch(`/api/hls?url=${encodeURIComponent(finalUrl)}${wantCut ? '&mode=cut' : ''}`)).json();
+          const r = await (await fetch(`/api/hls?url=${encodeURIComponent(finalUrl)}${wantCut ? '&mode=cut' : ''}${headersQuery()}`)).json();
           if (r && r.absoluteUrl && (Array.isArray(r.ranges) || r.cut)) {
             playUrl = r.absoluteUrl;
             adTotalDur = Number(r.duration) || 0;
@@ -4204,7 +4270,7 @@
       // 否则会拿到 CDN 另一次插播算出的区间，反而对不上。
       if (!proxyOk && isHls && adFilterEnabled()) {
         try {
-          const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}`)).json();
+          const r = await (await fetch(`/api/ads?url=${encodeURIComponent(finalUrl)}${headersQuery()}`)).json();
           if (r && Array.isArray(r.ranges)) {
             adTotalDur = Number(r.duration) || 0;
             adRanges = r.ranges;
@@ -4273,7 +4339,7 @@
 
       // mpv 内核模式：解码交给 mpv，网页只做控制
       if (isMpv()) {
-        openMpv(playUrl, resumeAt || 0);
+        openMpv(playUrl, resumeAt || 0, mediaHeaders);
         probeAndWarn(finalUrl, true);
         return;
       }
@@ -4333,6 +4399,7 @@
               enableWorker: true,
               lowLatencyMode: false,
               startFragPrefetch: true,
+              xhrSetup: (xhr) => { try { for (const k in mediaHeaders) xhr.setRequestHeader(k, mediaHeaders[k]); } catch (e) {} },
               // 跟随「缓冲」下拉（默认 120 秒），三个内核语义一致
               maxBufferLength: cacheSecs(),
               maxMaxBufferLength: cacheSecs() * 2,
@@ -4356,7 +4423,9 @@
               maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
               enableCEA708Captions: false,
               manifestLoadingTimeOut: 15000,
-              fragLoadingTimeOut: 20000
+              fragLoadingTimeOut: 20000,
+              // 虫包给的地址常要求 Referer/Origin：分片请求也要带上
+              xhrSetup: (xhr) => { try { for (const k in mediaHeaders) xhr.setRequestHeader(k, mediaHeaders[k]); } catch (e) {} }
             };
           hls = new Hls(hlsCfg);
           hls.loadSource(playUrl);
