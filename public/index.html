@@ -3274,6 +3274,7 @@
     /* ==================== 收藏 / 历史 ==================== */
 
     async function showFavorites(el) {
+      renderFilterBar('');   // 筛选条只属于分类视图
       setActiveTab(el);
       listState = { mode: 'static', kind: 'favorites', tid: '', page: 1, pagecount: 1, loading: false, total: 0 };
       showStatus('正在加载收藏...');
@@ -3295,6 +3296,7 @@
     }
 
     async function showHistory(el) {
+      renderFilterBar('');   // 筛选条只属于分类视图
       setActiveTab(el);
       listState = { mode: 'static', kind: 'history', tid: '', page: 1, pagecount: 1, loading: false, total: 0 };
       showStatus('正在加载播放历史...');
@@ -3372,6 +3374,7 @@
     }
 
     function renderStaticList(list, emptyText, label) {
+      renderFilterBar('');   // 收藏/历史/搜索都不是分类视图
       const grid = document.getElementById('videoGrid');
       const msg = document.getElementById('statusMsg');
       if (!list.length) {
