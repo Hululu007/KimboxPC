@@ -7,6 +7,8 @@ const os = require('os');
 const crypto = require('crypto');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
+const SpiderEngine = require('./spiderEngine');
+const JvmBridge = require('./jvmBridge');
 const PlayerLauncher = require('./playerLauncher');
 const { ConfigRepo, HistoryRepo, FavoriteRepo, ShowMarkRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
 
@@ -113,14 +115,40 @@ const state = {
   configId: null,
   url: '',
   sites: [],
+  spider: '',          // 根配置里的 spider jar 规格（url;md5;hash），虫包站点加载时要用
   activeSite: null,
   loading: false,
   loadError: null,
   sitesVersion: Date.now()
 };
 
+/** 选中一个「能立刻用」的站点：优先非虫包（虫包首次加载要十几秒，不该卡住首页） */
+function pickDefaultSite(list, preferredKey) {
+  const preferred = preferredKey ? list.find(s => s.key === preferredKey) : null;
+  return preferred || list.find(s => !s.isDexSpider) || list[0] || null;
+}
+
+/** 统一搜索入口：虫包走 JVM 桥，普通 CMS 走 CmsEngine */
+async function searchSite(site, wd, page) {
+  if (site && site.isDexSpider) return SpiderEngine.search(site, wd, page, state.spider);
+  return CmsEngine.search(site, wd, page);
+}
+
+/** 配置里有虫包站点时，提前把 JVM 服务拉起来（只起进程，不加载站点，约 1 秒） */
+function warmJvmIfNeeded() {
+  if (!state.sites.some(s => s.isDexSpider)) return;
+  if (!JvmBridge.installed()) return;
+  setImmediate(() => { JvmBridge.ensureStarted().catch(e => JvmBridge.log('[warm] ' + e.message)); });
+}
+
 function publicSite(s) {
-  return { key: s.key, name: s.name, type: s.type, isDexSpider: !!s.isDexSpider };
+  return {
+    key: s.key,
+    name: s.name,
+    type: s.type,
+    isDexSpider: !!s.isDexSpider,
+    spider: !!s.isDexSpider
+  };
 }
 
 async function applyConfig(row) {
@@ -129,14 +157,17 @@ async function applyConfig(row) {
   state.loading = true;
   state.loadError = null;
   state.sitesVersion = Date.now();
+  // 换配置源：释放旧配置的 spider / 类加载器 / 解壳子进程（失败静默，最坏只是多占内存）
+  if (state.spider) JvmBridge.resetAll().catch(() => {});
 
   // 1. 本地缓存秒开：优先恢复上次解析成功的站点，0ms 即可响应前端，杜绝启动竞态
   const cached = loadConfigCache(row.id);
   if (cached && Array.isArray(cached.sites) && cached.sites.length > 0) {
     state.sites = cached.sites;
-    const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
-    state.activeSite = preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+    state.spider = cached.spider || state.spider;
+    state.activeSite = pickDefaultSite(state.sites, row.default_site);
     state.loading = false;
+    warmJvmIfNeeded();
   }
 
   // 2. 异步拉取/刷新远程配置
@@ -149,11 +180,12 @@ async function applyConfig(row) {
         const hasChanged = oldFingerprint !== newFingerprint;
 
         state.sites = parsed.sites;
+        state.spider = parsed.spider || '';
         const currentKey = state.activeSite ? state.activeSite.key : null;
         const stillActive = currentKey ? state.sites.find(s => s.key === currentKey) : null;
-        const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
-        state.activeSite = stillActive || preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+        state.activeSite = stillActive || pickDefaultSite(state.sites, row.default_site);
         saveConfigCache(row.id, parsed);
+        warmJvmIfNeeded();
         state.loadError = null;
 
         if (hasChanged) {
@@ -318,10 +350,10 @@ app.post('/api/configs/:id/sync', async (req, res) => {
     const isCurrent = (state.configId === id);
     if (isCurrent && hasChanged) {
       state.sites = parsed.sites;
+      state.spider = parsed.spider || '';
       const currentKey = state.activeSite ? state.activeSite.key : null;
       const stillActive = currentKey ? state.sites.find(s => s.key === currentKey) : null;
-      const preferred = row.default_site ? state.sites.find(s => s.key === row.default_site) : null;
-      state.activeSite = stillActive || preferred || state.sites.find(s => !s.isDexSpider) || state.sites[0] || null;
+      state.activeSite = stillActive || pickDefaultSite(state.sites, row.default_site);
       state.loadError = null;
       state.sitesVersion = Date.now();
     }
@@ -432,7 +464,12 @@ app.get('/api/sites/ping', async (req, res) => {
   const todo = [];
 
   for (const s of state.sites) {
-    if (s.isDexSpider) { out[s.key] = { ok: false, ms: 0, dex: true }; continue; }
+    if (s.isDexSpider) {
+      // 虫包站点不在 ping 里真的加载（首站要十几秒），只回报 JVM 是否就绪
+      const js = JvmBridge.status();
+      out[s.key] = { ok: js.installed && js.enabled, ms: 0, dex: true, jvm: js.running };
+      continue;
+    }
     const hit = sitePingCache.get(s.key);
     if (!force && hit && now - hit.ts < SITE_PING_TTL) { out[s.key] = { ms: hit.ms, ok: hit.ok }; continue; }
     todo.push(s);
@@ -496,7 +533,9 @@ app.get('/api/detail', async (req, res) => {
     const target = state.sites.find(s => s.key === siteKey);
     if (!target) return res.status(404).json({ error: '该影片所属站点不存在: ' + siteKey });
 
-    const detail = await CmsEngine.getDetail(target, req.query.id);
+    const detail = target.isDexSpider
+      ? await SpiderEngine.getDetail(target, req.query.id, state.spider)
+      : await CmsEngine.getDetail(target, req.query.id);
     if (!detail) return res.json(null);
 
     // 附带该片在本机的播放历史，用于续播
@@ -514,9 +553,44 @@ app.get('/api/search', async (req, res) => {
   if (!req.query.wd) return res.json({ list: [] });
   if (!requireSite(res)) return;
   try {
-    res.json(await CmsEngine.search(state.activeSite, req.query.wd, req.query.pg || 1));
+    res.json(await searchSite(state.activeSite, req.query.wd, req.query.pg || 1));
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+/* ==================== JVM 站源（虫包）状态 ==================== */
+
+app.get('/api/jvm/status', (req, res) => {
+  res.json(Object.assign(JvmBridge.status(), { spiderSites: state.sites.filter(s => s.isDexSpider).length }));
+});
+
+app.post('/api/jvm/restart', async (req, res) => {
+  try {
+    JvmBridge.stop();
+    await new Promise(r => setTimeout(r, 500));
+    await JvmBridge.ensureStarted();
+    res.json({ ok: true, status: JvmBridge.status() });
+  } catch (e) {
+    res.status(500).json({ error: e.message, status: JvmBridge.status() });
+  }
+});
+
+/** 虫包站点起播：把 (flag, id) 换成真正的媒体地址 */
+app.get('/api/spider/play', async (req, res) => {
+  const siteKey = String(req.query.siteKey || '');
+  const flag = String(req.query.flag || '');
+  const id = String(req.query.id || '');
+  if (!id) return res.status(400).json({ error: '缺少 id' });
+  const site = state.sites.find(s => s.key === siteKey);
+  if (!site) return res.status(404).json({ error: '站点不存在: ' + siteKey });
+  if (!site.isDexSpider) return res.status(400).json({ error: '该站点不是虫包站源' });
+  try {
+    const r = await SpiderEngine.play(site, flag, id, state.spider);
+    if (!r || !r.url) return res.status(502).json({ error: '站源未返回播放地址' });
+    res.json(r);
+  } catch (e) {
+    res.status(502).json({ error: e.message, stage: e.stage || '' });
   }
 });
 
@@ -550,7 +624,8 @@ app.get('/api/search/all', async (req, res) => {
   if (!wd) return res.json({ list: [], status: [] });
 
   const sites = state.sites.filter(s => !s.isDexSpider && s.searchable !== 0);
-  if (sites.length === 0) return res.json({ list: [], status: [] });
+  const spiderSites = JvmBridge.installed() ? state.sites.filter(s => s.isDexSpider && s.searchable !== 0) : [];
+  if (sites.length === 0 && spiderSites.length === 0) return res.json({ list: [], status: [] });
 
   const CONCURRENCY = 8;
   const SITE_TIMEOUT = 9000;
@@ -577,7 +652,28 @@ app.get('/api/search/all', async (req, res) => {
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, sites.length) }, worker));
+  // 虫包站点单独跑：dex2jar/解壳吃 CPU，并发压到 2，且冷启动要 10~20 秒
+  let spiderCursor = 0;
+  async function spiderWorker() {
+    while (spiderCursor < spiderSites.length) {
+      const site = spiderSites[spiderCursor++];
+      const t0 = Date.now();
+      try {
+        const r = await withTimeout(searchSite(site, wd, 1), 45000);
+        const list = (r.list || []).map(v => ({ ...v, siteKey: site.key, siteName: site.name }));
+        collected.push(...list);
+        status.push({ key: site.key, name: site.name, count: list.length, ms: Date.now() - t0, spider: true });
+      } catch (e) {
+        status.push({ key: site.key, name: site.name, count: 0, error: true, ms: Date.now() - t0, spider: true, detail: e.message });
+      }
+    }
+  }
+
+  const jobs = [Promise.all(Array.from({ length: Math.min(CONCURRENCY, sites.length) }, worker))];
+  if (spiderSites.length) {
+    jobs.push(Promise.all(Array.from({ length: Math.min(2, spiderSites.length) }, spiderWorker)));
+  }
+  await Promise.all(jobs);
 
   // 同名影片合并：保留第一个，记录来源数量（清洗不可见零宽字符与标点，精准聚合）
   const merged = new Map();
@@ -1273,7 +1369,7 @@ app.get('/api/sources', async (req, res) => {
     return res.json({ ...hit.data, cached: true });
   }
 
-  const sites = state.sites.filter(s => !s.isDexSpider && s.searchable !== 0);
+  const sites = state.sites.filter(s => s.searchable !== 0 && (!s.isDexSpider || JvmBridge.installed()));
   if (sites.length === 0) return res.json({ list: [], totalSites: 0, okSites: 0 });
 
   const target = normName(name);
@@ -1287,21 +1383,23 @@ app.get('/api/sources', async (req, res) => {
       const site = sites[cursor++];
       const t0 = Date.now();
       try {
-        const s = await withTimeout(CmsEngine.search(site, name, 1), TIMEOUT);
+        const s = await withTimeout(searchSite(site, name, 1), site.isDexSpider ? 45000 : TIMEOUT);
         const candidates = s.list || [];
         // 片名完全一致，或包含关系（去掉标点后比较）
         const match = candidates.find(v => normName(v.vod_name) === target)
           || candidates.find(v => normName(v.vod_name).includes(target) || target.includes(normName(v.vod_name)));
         if (!match) continue;
 
-        const d = await withTimeout(CmsEngine.getDetail({ api: site.api }, match.vod_id), TIMEOUT);
+        const d = site.isDexSpider
+          ? await withTimeout(SpiderEngine.getDetail(site, match.vod_id, state.spider), 45000)
+          : await withTimeout(CmsEngine.getDetail({ api: site.api }, match.vod_id), TIMEOUT);
         if (!d || !d.playSources || d.playSources.length === 0) continue;
 
         // 顺带探测这条源首集的封装质量（有 discontinuity 的源更容易出现声音异常）
         let probe = null;
         try {
           const firstUrl = d.playSources[0].episodes[0].url;
-          probe = await probePlaylist(firstUrl);
+          if (/^https?:\/\//i.test(firstUrl)) probe = await probePlaylist(firstUrl);
         } catch (e) {}
 
         results.push({
