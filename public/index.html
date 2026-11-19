@@ -1181,6 +1181,12 @@
       </div>
       <div class="cfg-sub">点「启用」切换到该配置源，点「删除」只删除这一条（不影响收藏与历史）。</div>
       <div id="cfgList"></div>
+
+      <div class="cfg-sub" style="margin-top:14px" id="mJvmRow">
+        站源服务（JVM 虫包）：<span id="mJvmStatusText">未启动</span>
+        <button class="ghost-btn" style="margin-left:10px" onclick="restartJvm()">重启服务</button>
+        <span style="color:var(--text-muted);font-size:12px;margin-left:8px">虫包首次加载 10~20 秒，之后走缓存</span>
+      </div>
     </div>
   </div>
 
@@ -1712,8 +1718,15 @@
             ? `运行中（端口 ${s.port}，冷启动 ${(s.coldStartMs / 1000).toFixed(1)}s）`
             : (s.installed ? '未启动（首次使用虫包站源时自动启动）' : '运行时缺失（需 tools\\fetch-jvm.ps1）')) + pl;
         }
+        const mTxt = document.getElementById('mJvmStatusText');
+        if (mTxt) {
+          const pp = s.preload || {};
+          const pl2 = pp.total ? `｜预加载 ${pp.done}/${pp.total}${pp.running ? '…' : (pp.failed ? `（失败 ${pp.failed}）` : '（完成）')}` : '';
+          mTxt.textContent = (s.running
+            ? `运行中（端口 ${s.port}）`
+            : (s.installed ? '未启动（首次使用虫包站源时自动启动）' : '运行时缺失（需 tools\\fetch-jvm.ps1）')) + pl2;
+        }
         if (window.__siteList) renderSiteOptions(window.__siteList, activeSiteKey);
-        // 启动预加载跑完后提示一次（每个进程会话只提示一次）
         const p = s.preload || {};
         if (p.total > 0 && !p.running && !window.__preloadNotified) {
           window.__preloadNotified = true;
@@ -2041,6 +2054,7 @@
 
     /* ==================== 配置源管理面板 ==================== */
     async function openConfigManager() {
+      refreshJvmStatus();
       await renderConfigManager();
       document.getElementById('cfgMask').classList.add('show');
     }
