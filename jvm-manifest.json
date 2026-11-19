@@ -1,0 +1,28 @@
+{
+  "upstream": "https://github.com/KuekHaoYang/xiugou-tv",
+  "upstreamVersion": "1.12.5",
+  "upstreamCommit": "f8858b5",
+  "note": "第三方 GPLv3 组件：JVM 站源解析服务（android-bridge + dex2jar + unidbg）。由 tools/fetch-jvm.ps1 从本地 xiugou-tv 构建产物拷入，未修改。",
+  "components": [
+    {
+      "path": "jvm/companion-service.jar",
+      "bytes": 38678516,
+      "sha256": "b6a86bcfe6fcd18fe001ebd55681a299438ef69ffae9f62ffb649ab4481c2469"
+    },
+    {
+      "path": "jvm/bcprov-jdk18on-1.78.1.jar",
+      "bytes": 8324412,
+      "sha256": "add5915e6acfc6ab5836e1fd8a5e21c6488536a8c1f21f386eeb3bf280b702d7"
+    },
+    {
+      "path": "jvm/lib-unidbg",
+      "files": 15,
+      "bytes": 27704880
+    },
+    {
+      "path": "runtime/jre",
+      "files": 176,
+      "bytes": 52200307
+    }
+  ]
+}

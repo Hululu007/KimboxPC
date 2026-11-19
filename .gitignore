@@ -45,3 +45,8 @@ _l*.err
 _accept.json
 _cut_accept.json
 
+
+# JVM 站源运行时（体积大，不入库；用 tools\fetch-jvm.ps1 从本地 xiugou-tv 构建产物拷入）
+jvm/
+runtime/
+data/jvm/
