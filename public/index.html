@@ -517,7 +517,7 @@
       flex: 0 0 auto;
       display: flex;
       flex-direction: column;
-      max-height: 42vh;
+      max-height: 50vh;
       background: #0e1114;
       border-top: 1px solid var(--border);
     }
@@ -852,8 +852,9 @@
 
     .source-tabs {
       display: flex;
+      flex-wrap: wrap;      /* 同片源多时自动换行、向下扩展，不再用横向滚动条 */
       gap: 8px;
-      overflow-x: auto;
+      overflow-x: visible;
       padding-bottom: 2px;
     }
     .source-tab {
