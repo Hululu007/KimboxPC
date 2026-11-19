@@ -161,7 +161,47 @@ async function searchSite(site, wd, page) {
 function warmJvmIfNeeded() {
   if (!state.sites.some(s => s.isDexSpider)) return;
   if (!JvmBridge.installed()) return;
-  setImmediate(() => { JvmBridge.ensureStarted().catch(e => JvmBridge.log('[warm] ' + e.message)); });
+  setImmediate(() => {
+    JvmBridge.ensureStarted()
+      .then(() => preloadSpiderSites())
+      .catch(e => JvmBridge.log('[warm] ' + e.message));
+  });
+}
+
+/* ---------- 虫包站点启动预加载 ----------
+   加固站首次要「下载 jar → 解壳 → dex2jar → 实例化」，单站 10~20 秒。
+   空闲时后台按 2 并发把这些站点都 load 一遍，用户点开时直接命中缓存；
+   同一份 jar 只会解一次，后面的站点主要是类加载，几百毫秒级。 */
+const preloadState = { total: 0, done: 0, ok: 0, failed: 0, running: false, startedAt: 0, fingerprint: '' };
+
+function preloadSpiderSites() {
+  if (!JvmBridge.installed()) return;
+  const list = state.sites.filter(s => s.isDexSpider && s.searchable !== 0);
+  if (!list.length) return;
+  const fingerprint = list.map(s => s.key).join('|') + '#' + state.spider;
+  if (preloadState.running || preloadState.fingerprint === fingerprint) return;
+
+  Object.assign(preloadState, { total: list.length, done: 0, ok: 0, failed: 0, running: true, startedAt: Date.now(), fingerprint });
+  JvmBridge.log(`[preload] 开始预加载 ${list.length} 个虫包站点`);
+  (async () => {
+    const queue = list.slice();
+    const worker = async () => {
+      while (queue.length) {
+        const s = queue.shift();
+        try {
+          const ok = await JvmBridge.loadSite({ siteKey: s.key, api: s.api, ext: s.ext || '', jar: state.spider, timeoutMs: 240000 });
+          if (ok) preloadState.ok++; else preloadState.failed++;
+        } catch (e) {
+          preloadState.failed++;
+          JvmBridge.log(`[preload] ${s.key} 失败: ${e.message}`);
+        }
+        preloadState.done++;
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    preloadState.running = false;
+    JvmBridge.log(`[preload] 完成：成功 ${preloadState.ok}，失败 ${preloadState.failed}，耗时 ${Date.now() - preloadState.startedAt}ms`);
+  })().catch(e => { preloadState.running = false; JvmBridge.log('[preload] 异常: ' + e.message); });
 }
 
 function publicSite(s) {
@@ -529,7 +569,9 @@ function requireSite(res) {
 app.get('/api/home', async (req, res) => {
   if (!requireSite(res)) return;
   try {
-    res.json(await CmsEngine.getHome(state.activeSite));
+    res.json(state.activeSite.isDexSpider
+      ? await SpiderEngine.home(state.activeSite, state.spider)
+      : await CmsEngine.getHome(state.activeSite));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -538,7 +580,9 @@ app.get('/api/home', async (req, res) => {
 app.get('/api/category', async (req, res) => {
   if (!requireSite(res)) return;
   try {
-    res.json(await CmsEngine.getCategory(state.activeSite, req.query.tid || '', req.query.pg || 1));
+    res.json(state.activeSite.isDexSpider
+      ? await SpiderEngine.category(state.activeSite, req.query.tid || '', req.query.pg || 1, req.query.extend || '', state.spider)
+      : await CmsEngine.getCategory(state.activeSite, req.query.tid || '', req.query.pg || 1));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -556,9 +600,19 @@ app.get('/api/detail', async (req, res) => {
     const target = state.sites.find(s => s.key === siteKey);
     if (!target) return res.status(404).json({ error: '该影片所属站点不存在: ' + siteKey });
 
-    const detail = target.isDexSpider
-      ? await SpiderEngine.getDetail(target, req.query.id, state.spider)
-      : await CmsEngine.getDetail(target, req.query.id);
+    const nameHint = String(req.query.name || '').trim();
+    let detail = null;
+    if (target.isDexSpider) {
+      // 虫包：搜索 id 与详情 id 可能不是同一套命名空间（实测 AppV7 系：搜索能出结果，
+      // 但详情报 video_detail decrypt empty；用分类里的 id 却正常）。
+      // 详情失败时按片名回退到本站分类里找一遍，找到就用分类的 id 重新取。
+      try { detail = await SpiderEngine.getDetail(target, req.query.id, state.spider); } catch (e) { detail = null; }
+      if (!detail && nameHint) {
+        try { detail = await SpiderEngine.resolveByTitle(target, nameHint, state.spider); } catch (e) {}
+      }
+    } else {
+      detail = await CmsEngine.getDetail(target, req.query.id);
+    }
     if (!detail) return res.json(null);
 
     // 附带该片在本机的播放历史，用于续播
@@ -585,7 +639,10 @@ app.get('/api/search', async (req, res) => {
 /* ==================== JVM 站源（虫包）状态 ==================== */
 
 app.get('/api/jvm/status', (req, res) => {
-  res.json(Object.assign(JvmBridge.status(), { spiderSites: state.sites.filter(s => s.isDexSpider).length }));
+  res.json(Object.assign(JvmBridge.status(), {
+    spiderSites: state.sites.filter(s => s.isDexSpider).length,
+    preload: Object.assign({}, preloadState, { fingerprint: undefined })
+  }));
 });
 
 app.post('/api/jvm/restart', async (req, res) => {

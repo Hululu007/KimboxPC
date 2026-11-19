@@ -1682,11 +1682,25 @@
         const txt = document.getElementById('jvmStatusText');
         if (label) label.style.display = (s.spiderSites > 0) ? '' : 'none';
         if (txt) {
-          txt.textContent = s.running
+          const p = s.preload || {};
+          const pl = p.total ? `｜预加载 ${p.done}/${p.total}${p.running ? '…' : (p.failed ? `（失败 ${p.failed}）` : '（完成）')}` : '';
+          txt.textContent = (s.running
             ? `运行中（端口 ${s.port}，冷启动 ${(s.coldStartMs / 1000).toFixed(1)}s）`
-            : (s.installed ? '未启动（首次使用虫包站源时自动启动）' : '运行时缺失（需 tools\\fetch-jvm.ps1）');
+            : (s.installed ? '未启动（首次使用虫包站源时自动启动）' : '运行时缺失（需 tools\\fetch-jvm.ps1）')) + pl;
         }
         if (window.__siteList) renderSiteOptions(window.__siteList, activeSiteKey);
+        // 启动时 JVM 与预加载是异步起来的：只要「还没起来」或「预加载没跑完」就继续轮询，
+        // 最多 12 次（约 30 秒），避免页面停在「未启动」的旧快照上。
+        const needPoll = (s.preload && s.preload.running) || (!s.running && s.installed);
+        if (needPoll) {
+          window.__jvmPollCount = (window.__jvmPollCount || 0) + 1;
+          if (window.__jvmPollCount <= 12) {
+            clearTimeout(window.__jvmPollTimer);
+            window.__jvmPollTimer = setTimeout(refreshJvmStatus, 2500);
+          }
+        } else {
+          window.__jvmPollCount = 0;
+        }
       } catch (e) {}
     }
 
@@ -2505,7 +2519,7 @@
       const siteKey = v.siteKey || activeSiteKey;
       const card = document.createElement('div');
       card.className = 'card';
-      card.onclick = () => openDetail(v.vod_id, siteKey);
+      card.onclick = () => openDetail(v.vod_id, siteKey, null, null, v.vod_name || '');
 
       const fallback = 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'140\'><rect width=\'100%\' height=\'100%\' fill=\'%23222\'/></svg>';
       let progress = '';
@@ -3302,7 +3316,7 @@
       list.forEach(v => grid.appendChild(buildCard(v)));
     }
 
-    async function openDetail(id, siteKey, targetEpIdx = null, targetPos = null) {
+    async function openDetail(id, siteKey, targetEpIdx = null, targetPos = null, vodName = '') {
       // 先进入播放页并给出加载反馈，避免点击后长时间无响应
       document.getElementById('playerView').classList.add('active');
       syncAdFilterUI();
@@ -3328,12 +3342,17 @@
 
       try {
         const key = siteKey || activeSiteKey;
-        const resp = await fetch(`/api/detail?id=${encodeURIComponent(id)}&siteKey=${encodeURIComponent(key)}`);
+        const resp = await fetch(`/api/detail?id=${encodeURIComponent(id)}&siteKey=${encodeURIComponent(key)}${vodName ? '&name=' + encodeURIComponent(vodName) : ''}`);
         const detail = await resp.json();
         if (!detail || detail.error) {
           pendingEpIdx = null;
           pendingPos = null;
-          showToast('获取详情失败: ' + (detail && detail.error ? detail.error : '该片可能已下架'), 3000);
+          // 虫包站源：部分站点（实测 AppV7 系）的搜索结果是第三方索引，id 在详情里解不开，
+          // 这类站只能从它的分类列表进入。给用户一句可操作的提示，而不是笼统的「获取失败」。
+          const isSpiderSite = !!(window.__siteList || []).find(s => s.key === key && s.isDexSpider);
+          showToast(isSpiderSite
+            ? '该虫包站的搜索结果无法取详情（站源索引不互通），请切回首页从它的分类列表进入'
+            : ('获取详情失败: ' + (detail && detail.error ? detail.error : '该片可能已下架')), 5000);
           document.getElementById('mTitle').textContent = '获取失败';
           return;
         }

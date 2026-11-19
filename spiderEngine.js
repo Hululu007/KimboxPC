@@ -168,13 +168,39 @@ async function play(site, flag, id, jar) {
 async function home(site, jar) {
   await ensureLoaded(site, jar);
   try {
-    const data = parseJson(await bridge.callSpider(Object.assign(basePayload(site, jar), {
+    const data = parseJson(await callWithRetry(site, jar, {
       method: 'homeContent', params: {}, timeoutMs: 60000
-    })));
+    }));
+    const rawClasses = (data && Array.isArray(data.class) ? data.class : []).map(c => ({
+      type_id: String(c.type_id),
+      type_name: cleanTitle(c.type_name)
+    }));
+    // 与 CmsEngine 一致：配置里写了 categories 白名单就按白名单顺序输出
+    let classes = [];
+    const seen = new Set();
+    if (Array.isArray(site.categories) && site.categories.length > 0) {
+      const byName = new Map(rawClasses.map(c => [c.type_name, c.type_id]));
+      for (const name of site.categories) {
+        const key = cleanTitle(name);
+        const id = byName.get(key);
+        if (id !== undefined && !seen.has(id)) { seen.add(id); classes.push({ type_id: id, type_name: key }); }
+      }
+    }
+    if (classes.length === 0) {
+      for (const c of rawClasses) {
+        if (!c.type_id || seen.has(c.type_id)) continue;
+        seen.add(c.type_id);
+        classes.push(c);
+      }
+    }
+    const list = (data && Array.isArray(data.list) ? data.list : []).map(toVideoItem);
     return {
-      classes: (data && Array.isArray(data.class) ? data.class : []).map(c => ({ type_id: String(c.type_id), type_name: cleanTitle(c.type_name) })),
-      list: (data && Array.isArray(data.list) ? data.list : []).map(toVideoItem),
-      filters: (data && data.filters) || {}
+      classes,
+      list,
+      filters: (data && data.filters) || {},
+      page: 1,
+      pagecount: Number(data && data.pagecount) || 1,
+      total: Number(data && data.total) || list.length
     };
   } catch (e) { throw wrapError(e); }
 }
@@ -182,11 +208,11 @@ async function home(site, jar) {
 async function category(site, tid, page = 1, extend, jar) {
   await ensureLoaded(site, jar);
   try {
-    const data = parseJson(await bridge.callSpider(Object.assign(basePayload(site, jar), {
+    const data = parseJson(await callWithRetry(site, jar, {
       method: 'categoryContent',
       params: { tid: String(tid), pg: String(page), filter: 'true', extend: extend ? JSON.stringify(extend) : '' },
       timeoutMs: 60000
-    })));
+    }));
     const list = (data && Array.isArray(data.list)) ? data.list : [];
     return {
       list: list.map(toVideoItem),
@@ -197,4 +223,38 @@ async function category(site, tid, page = 1, extend, jar) {
   } catch (e) { throw wrapError(e); }
 }
 
-module.exports = { search, getDetail, play, home, category, ensureLoaded, stageText };
+/** 归一化片名（与 server.js 的 normName 等价） */
+function normTitle(s) {
+  return String(s || '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    .replace(/[\s·・,，.。:：!！?？'"“”()（）\[\]【】\-_]/g, '')
+    .toLowerCase();
+}
+
+/**
+ * 按片名回退：部分站源（实测 AppV7 系）的 searchContent 返回的 vod_id 与
+ * detailContent 能解开的 id 不是同一套命名空间 —— 搜索能出结果，但点进去
+ * 「video_detail decrypt empty」。这类站点用分类列表里的 id 就能正常取详情，
+ * 所以搜索无果时按片名在本站分类里找一遍，找到就用它的 id 重新取详情。
+ */
+async function resolveByTitle(site, title, jar) {
+  const want = normTitle(title);
+  if (!want) return null;
+  let classes = [];
+  try { classes = (await home(site, jar)).classes || []; } catch (e) { return null; }
+  for (const c of classes.slice(0, 6)) {
+    let page1;
+    try { page1 = await category(site, c.type_id, 1, '', jar); } catch (e) { continue; }
+    const hit = (page1.list || []).find(v => normTitle(v.vod_name) === want);
+    if (hit) {
+      try {
+        const d = await getDetail(site, hit.vod_id, jar);
+        if (d) return d;
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+
+module.exports = { search, getDetail, play, home, category, resolveByTitle, ensureLoaded, stageText };
