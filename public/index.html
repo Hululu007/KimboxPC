@@ -1371,6 +1371,15 @@
         <button class="pv-toggle" id="pvToggleBtn" onclick="togglePanel()">展开 ▾</button>
       </div>
       <div class="pv-panel-body">
+        <div class="row-label">选择播放源线路：</div>
+        <div class="source-tabs" id="mSourceTabs"></div>
+
+        <div class="row-label">选集列表：</div>
+        <div class="episodes-grid" id="mEpisodes"></div>
+
+        <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
+        <div class="source-tabs" id="mAllSources"><span class="src-loading">正在聚合各站点同片源…</span></div>
+
         <div id="compatOptions">
           <label class="audio-auto">
             <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
@@ -1420,15 +1429,6 @@
           <select id="audioSel" onchange="changeAudioTrack(this.value)" title="音轨"></select>
           <button class="ghost-btn" onclick="pickSubtitleFile()">＋ 外挂字幕</button>
         </div>
-
-        <div class="row-label">同片源 · 按延迟排序（点一下即可换源）：</div>
-        <div class="source-tabs" id="mAllSources"><span class="src-loading">正在聚合各站点同片源…</span></div>
-
-        <div class="row-label">选择播放源线路：</div>
-        <div class="source-tabs" id="mSourceTabs"></div>
-
-        <div class="row-label">选集列表：</div>
-        <div class="episodes-grid" id="mEpisodes"></div>
 
         <div class="pv-desc" id="mDesc"></div>
         <div class="pv-tips">快捷键：空格 播放/暂停 · ←/→ 快退/快进 10 秒 · ↑/↓ 音量 · F 全屏 · I 信息层 · Esc 返回</div>
