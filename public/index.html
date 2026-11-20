@@ -1774,11 +1774,16 @@
       if (s.hasUpdate) {
         showToast('开始下载新版本…', 3000);
         renderUpdateUI(Object.assign({}, s, { downloading: true, progress: 0 }));
-        try {
-          const r = await (await fetch('/api/update/download', { method: 'POST' })).json();
-          if (r.error) throw new Error(r.error);
-        } catch (e) { showToast('下载失败：' + e.message, 6000); }
-        await refreshUpdateStatus();
+        // 不等接口返回（它要等整包下完），边下边轮询进度
+        fetch('/api/update/download', { method: 'POST' }).catch(function () {});
+        const timer = setInterval(async () => {
+          const st = await refreshUpdateStatus();
+          if (!st || !st.downloading) {
+            clearInterval(timer);
+            await refreshUpdateStatus();
+            if (st && st.error) showToast('下载失败：' + st.error, 6000);
+          }
+        }, 800);
         return;
       }
       // 没有可用更新 → 手动检查

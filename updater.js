@@ -168,10 +168,13 @@ async function download(force) {
       responseType: 'stream',
       timeout: 60000,
       maxRedirects: 5,
-      headers: { 'User-Agent': UA },
-      onDownloadProgress: (e) => {
-        if (e.total) st.progress = Math.min(99, Math.round(e.loaded / e.total * 100));
-      }
+      headers: { 'User-Agent': UA }
+    });
+    const total = Number(r.headers['content-length']) || Number(asset.size) || 0;
+    let received = 0;
+    r.data.on('data', (chunk) => {
+      received += chunk.length;
+      if (total > 0) st.progress = Math.min(99, Math.floor(received / total * 100));
     });
     await new Promise((resolve, reject) => {
       const ws = fs.createWriteStream(target + '.part');
