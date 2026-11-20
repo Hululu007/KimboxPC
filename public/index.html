@@ -1729,7 +1729,7 @@
       btn.disabled = false;
       if (s.downloaded) {
         txt.textContent = cur + '｜新版本 v' + ((s.latest && s.latest.version) || '') + ' 已下载';
-        btn.textContent = '立即更新并重启'; if (pg) pg.textContent = ''; return;
+        btn.textContent = s.mode === 'installer' ? '立即更新（弹出安装程序）' : '打开下载文件夹'; if (pg) pg.textContent = ''; return;
       }
       if (s.hasUpdate) {
         txt.textContent = cur + ' → 新版本 v' + s.latest.version;
@@ -1760,15 +1760,20 @@
       if (!s) { showToast('读取更新状态失败', 3000); return; }
       if (s.downloading) { showToast('正在下载中，请稍候…', 2500); return; }
       if (s.downloaded) {
-        if (!confirm('更新会退出程序、覆盖安装后自动重启（配置/收藏/历史都会保留）。继续？')) return;
+        const isInst = s.mode === 'installer';
+        const tips = isInst
+          ? '点「立即更新」后会退出程序并弹出安装程序（能看到安装进度），装完自动启动新版本；配置/收藏/历史都会保留。继续？'
+          : '便携版不会自动覆盖：点「打开下载文件夹」，把下载的 zip 解压覆盖当前程序目录后重新打开即可（data/ 不受影响）。继续？';
+        if (!confirm(tips)) return;
         try {
           const r = await (await fetch('/api/update/apply', { method: 'POST' })).json();
           if (r.error) throw new Error(r.error);
-          showToast(r.action === 'installer' ? '正在静默安装并重启…' : '正在解压覆盖并重启…', 5000);
-        } catch (e) { showToast('启动更新失败：' + e.message, 6000); return; }
-        setTimeout(() => {
-          try { if (window.kimbox && window.kimbox.quit) window.kimbox.quit(); } catch (e) {}
-        }, 2500);
+          if (r.action === 'installer') {
+            showToast('安装程序即将弹出，按提示完成安装（能看到进度），装完会自动启动新版本', 8000);
+          } else {
+            showToast('已打开 data\\updates 文件夹：请把 zip 解压覆盖当前程序目录，然后重新打开', 10000);
+          }
+        } catch (e) { showToast('启动更新失败：' + e.message, 6000); }
         return;
       }
       if (s.hasUpdate) {

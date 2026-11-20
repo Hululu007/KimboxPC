@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const axios = require('axios');
 
 const ROOT = __dirname;
@@ -107,7 +108,7 @@ async function check(force) {
       notes: d.body || '',
       htmlUrl: d.html_url || '',
       publishedAt: d.published_at || '',
-      assets: (d.assets || []).map(a => ({ name: a.name, url: a.browser_download_url, size: a.size }))
+      assets: (d.assets || []).map(a => ({ name: a.name, url: a.browser_download_url, size: a.size, digest: a.digest || '' }))
     };
     st.lastCheck = Date.now();
     st.error = '';
@@ -187,6 +188,12 @@ async function download(force) {
     if (asset.size && Math.abs(size - asset.size) > 1024 * 64) {
       throw new Error(`下载不完整（${size}/${asset.size} 字节）`);
     }
+    // 用 GitHub 给的 digest 做完整性校验（和 xiugou-tv 的做法一致）
+    if (asset.digest && /^sha256:/i.test(asset.digest)) {
+      const want = asset.digest.replace(/^sha256:/i, '').toLowerCase();
+      const got = await sha256File(target + '.part');
+      if (got !== want) throw new Error('安装包校验失败（sha256 不一致），已删除，请重试');
+    }
     try { fs.unlinkSync(target); } catch (e) {}
     fs.renameSync(target + '.part', target);
     st.progress = 100;
@@ -202,129 +209,39 @@ async function download(force) {
   return status();
 }
 
-/** 以「完全隐藏」的方式启动 bat：cmd.exe 在 detached 下仍会弹控制台，改用 wscript 0 窗口 */
-function spawnHidden(bat, arg) {
-  try {
-    const vbs = path.join(UPDATE_DIR, 'run-hidden.vbs');
-    fs.writeFileSync(vbs,
-      'CreateObject("WScript.Shell").Run """" & WScript.Arguments(0) & """ " & WScript.Arguments(1), 0, False\r\n',
-      'ascii');
-    const child = spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe'),
-      ['//nologo', '//b', vbs, bat, arg], { detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true });
-    child.unref();
-    return child;
-  } catch (e) {
-    // 兜底：还是用 cmd，至少能更新，只是可能看到窗口
-    const child = spawn('cmd.exe', ['/c', bat, arg], { detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true });
-    child.unref();
-    return child;
-  }
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    const rs = fs.createReadStream(file);
+    rs.on('data', (d) => h.update(d));
+    rs.on('error', reject);
+    rs.on('end', () => resolve(h.digest('hex')));
+  });
 }
 
-/** 生成便携版覆盖脚本内容（纯 ASCII：路径通过参数传入，避免 cmd 用 GBK 解码 UTF-8 中文路径） */
-function buildPortableScript() {
-  // 不传路径参数：脚本自己从所在目录（<ROOT>\data\updates）推算，
-  // 避免 cmd 引号/编码把中文或空格路径搞坏。只传一个 PID。
-  return [
-    '@echo off',
-    'chcp 936 >nul',
-    'setlocal',
-    'for %%A in ("%~dp0..\\..") do set "ROOT=%%~fA"',
-    'for /f "delims=" %%F in (\'dir /b "%~dp0*.zip" 2^>nul\') do set "ZIP=%~dp0%%F"',
-    'set "PID=%~1"',
-    'set "TMPDIR=%ROOT%\\data\\updates\\extract"',
-    'set "LOG=%ROOT%\\data\\updates\\apply.log"',
-    'if not exist "%ZIP%" ( echo [%date% %time%] no zip >> "%LOG%" & exit /b 1 )',
-    'echo [%date% %time%] wait pid=%PID% >> "%LOG%"',
-    'set /a TRIES=0',
-    ':wait',
-    'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
-    'if errorlevel 1 goto go',
-    'set /a TRIES+=1',
-    'if %TRIES% GEQ 40 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
-    'ping -n 2 127.0.0.1 >nul',
-    'goto wait',
-    ':go',
-    'echo [%date% %time%] extract >> "%LOG%"',
-    'if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%" >nul 2>&1',
-    'mkdir "%TMPDIR%" >nul 2>&1',
-    'tar -xf "%ZIP%" -C "%TMPDIR%" >nul 2>&1',
-    'if errorlevel 1 (',
-    '  echo [%date% %time%] tar failed, use Expand-Archive >> "%LOG%"',
-    '  powershell -NoProfile -Command "Expand-Archive -LiteralPath $env:ZIP -DestinationPath $env:TMPDIR -Force" >nul 2>&1',
-    ')',
-    'set "SRC=%TMPDIR%"',
-    'if exist "%TMPDIR%\\KimBoxPC\\node_modules" set "SRC=%TMPDIR%\\KimBoxPC"',
-    'if not exist "%SRC%\\node_modules" ( echo [%date% %time%] no node_modules, abort >> "%LOG%" & exit /b 1 )',
-    'echo [%date% %time%] copy >> "%LOG%"',
-    'robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np >nul',
-    'if errorlevel 8 (',
-    '  echo [%date% %time%] robocopy retry >> "%LOG%"',
-    '  ping -n 3 127.0.0.1 >nul',
-    '  robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np >nul',
-    ')',
-    'rmdir /s /q "%TMPDIR%" >nul 2>&1',
-    'echo [%date% %time%] done, restart >> "%LOG%"',
-    'set "ELECTRON_RUN_AS_NODE="',
-    'pushd "%ROOT%"',
-    'start "" "%ROOT%\\node_modules\\electron\\dist\\electron.exe" "%ROOT%"',
-    'popd',
-    'del "%ZIP%" >nul 2>&1',
-    'del "%~f0" >nul 2>&1',
-    'exit /b 0'
-  ].join('\r\n');
-}
-
-function applyPortable(zipPath) {
-  const bat = path.join(UPDATE_DIR, 'apply-update.bat');
-  fs.writeFileSync(bat, buildPortableScript(), 'ascii');
-  // 路径可能含空格/中文：带引号传入，cmd 才会当成单个参数
-  const child = spawnHidden(bat, String(process.pid));
-  child.unref();
-  log('便携版更新脚本已启动');
-}
-
-/** 安装版：等主进程退出 → 静默安装 → 重新拉起（生成纯 ASCII 的 bat，路径用参数传） */
-function buildInstallerScript() {
-  return [
-    '@echo off',
-    'chcp 936 >nul',
-    'setlocal',
-    'for %%A in ("%~dp0..\\..") do set "ROOT=%%~fA"',
-    'for /f "delims=" %%F in (\'dir /b "%~dp0*_Setup.exe" 2^>nul\') do set "SETUP=%~dp0%%F"',
-    'set "PID=%~1"',
-    'set "LOG=%ROOT%\\data\\updates\\apply.log"',
-    'if not exist "%SETUP%" ( echo [%date% %time%] no setup >> "%LOG%" & exit /b 1 )',
-    'echo [%date% %time%] wait pid=%PID% >> "%LOG%"',
-    'set /a TRIES=0',
-    ':wait',
-    'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
-    'if errorlevel 1 goto go',
-    'set /a TRIES+=1',
-    'if %TRIES% GEQ 40 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
-    'ping -n 2 127.0.0.1 >nul',
-    'goto wait',
-    ':go',
-    'echo [%date% %time%] install start "%SETUP%" >> "%LOG%"',
-    '"%SETUP%" /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /LOG="%ROOT%\\data\\updates\\inno-install.log"',
-    'echo [%date% %time%] install exit=%errorlevel% >> "%LOG%"',
-    'ping -n 2 127.0.0.1 >nul',
-    'set "ELECTRON_RUN_AS_NODE="',
-    'pushd "%ROOT%"',
-    'start "" "%ROOT%\\node_modules\\electron\\dist\\electron.exe" "%ROOT%"',
-    'popd',
-    'del "%SETUP%" >nul 2>&1',
-    'del "%~f0" >nul 2>&1',
-    'exit /b 0'
-  ].join('\r\n');
-}
-
+/**
+ * 安装版：直接启动 Inno 安装程序（**带界面、能看到进度**），然后退出自己。
+ * 参考 xiugou-tv 的 InstallerLauncher：只传 /CLOSEAPPLICATIONS /NORESTART，
+ * 不使用 /SILENT 或 /VERYSILENT——用户要能看到安装过程。
+ */
 function applyInstaller(exePath) {
-  const bat = path.join(UPDATE_DIR, 'apply-install.bat');
-  fs.writeFileSync(bat, buildInstallerScript(), 'ascii');
-  const child = spawnHidden(bat, String(process.pid));
+  const child = spawn(exePath, ['/CLOSEAPPLICATIONS', '/NORESTART'], {
+    detached: true, stdio: 'ignore', cwd: path.dirname(exePath)
+  });
   child.unref();
-  log('安装版更新脚本已启动');
+  log('已启动安装程序（可见界面）: ' + path.basename(exePath));
+}
+
+/**
+ * 便携版：**不自动覆盖自己**（进程正在运行、目录结构也各异）。
+ * 只把下载好的 zip 所在目录打开，让用户自己解压覆盖——这也是 xiugou-tv 的做法：
+ * 便携版只提示，不自动替换。
+ */
+function openUpdatesFolder() {
+  try {
+    spawn('explorer.exe', [UPDATE_DIR], { detached: true, stdio: 'ignore' }).unref();
+    return true;
+  } catch (e) { return false; }
 }
 
 function apply() {
@@ -334,11 +251,12 @@ function apply() {
   if (mode === 'installer') {
     if (!/\.exe$/i.test(dl.path)) throw new Error('安装版需要 Setup.exe 更新包');
     applyInstaller(dl.path);
-    return { ok: true, action: 'installer' };
+    return { ok: true, action: 'installer', file: dl.path };
   }
   if (!/\.zip$/i.test(dl.path)) throw new Error('便携版需要 zip 更新包');
-  applyPortable(dl.path);
-  return { ok: true, action: 'portable' };
+  const opened = openUpdatesFolder();
+  log('便携版：已下载 ' + dl.name + '，等待用户手动覆盖');
+  return { ok: true, action: 'manual', file: dl.path, folder: UPDATE_DIR, opened };
 }
 
 /** 启动后延迟检查一次（不阻塞、不弹窗，交给前端决定是否提示） */
@@ -348,4 +266,4 @@ function scheduleAutoCheck(delayMs = 20000) {
   if (t.unref) t.unref();
 }
 
-module.exports = { check, status, download, apply, scheduleAutoCheck, installMode, cmpVersion, buildPortableScript, buildInstallerScript };
+module.exports = { check, status, download, apply, scheduleAutoCheck, installMode, cmpVersion, sha256File };

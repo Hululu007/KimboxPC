@@ -1788,13 +1788,15 @@ app.post('/api/update/apply', (req, res) => {
   try {
     const r = Updater.apply();
     res.json(r);
-    // 更新脚本要等本进程退出才能覆盖文件：服务端自己触发退出，不依赖前端是否还活着
+    // 便携版只是打开下载目录让用户自己覆盖，进程照常运行
+    if (r.action !== 'installer') return;
+    // 安装版：启动安装程序后退出自己，安装器才能替换文件
     setTimeout(() => {
       const has = process.emit('kimbox:quit');
       if (!has) return process.exit(0);
-      // 兜底：万一 app.quit() 被什么挂住，4 秒后强制退出，否则更新脚本会一直等 PID
+      // 兜底：万一 app.quit() 被什么挂住，4 秒后强制退出
       setTimeout(() => { try { process.exit(0); } catch (e) {} }, 4000);
-    }, 1500);
+    }, 1200);
   } catch (e) {
     res.status(409).json({ error: e.message });
   }
