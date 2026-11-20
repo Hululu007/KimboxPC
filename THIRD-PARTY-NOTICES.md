@@ -6,6 +6,14 @@ KimBoxPC 站在很多开源项目的肩膀上。这里尽量完整地列出**随
 
 ---
 
+## 零、许可范围说明
+
+- 本仓库自身源代码采用 **MIT License**（见 [LICENSE](LICENSE)），可自由使用、修改、再分发（保留版权声明）。
+- 随包分发的第三方二进制（FFmpeg、libmpv、Vulkan-Loader、xiugou-tv 的 JVM 运行时及其依赖、hls.js、mpegts.js、BouncyCastle、OpenJDK 等）**不受 MIT 覆盖**，仍适用各自许可（见下文）。
+- 如需再分发安装包/便携包，请同时满足下述 GPL 组件的源码可获取要求。
+
+---
+
 ## 一、运行时与 Web 框架
 
 | 组件 | 用途 | 许可 | 来源 |
