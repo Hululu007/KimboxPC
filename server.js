@@ -1791,7 +1791,9 @@ app.post('/api/update/apply', (req, res) => {
     // 更新脚本要等本进程退出才能覆盖文件：服务端自己触发退出，不依赖前端是否还活着
     setTimeout(() => {
       const has = process.emit('kimbox:quit');
-      if (!has) process.exit(0);
+      if (!has) return process.exit(0);
+      // 兜底：万一 app.quit() 被什么挂住，4 秒后强制退出，否则更新脚本会一直等 PID
+      setTimeout(() => { try { process.exit(0); } catch (e) {} }, 4000);
     }, 1500);
   } catch (e) {
     res.status(409).json({ error: e.message });

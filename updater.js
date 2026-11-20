@@ -199,6 +199,25 @@ async function download(force) {
   return status();
 }
 
+/** 以「完全隐藏」的方式启动 bat：cmd.exe 在 detached 下仍会弹控制台，改用 wscript 0 窗口 */
+function spawnHidden(bat, arg) {
+  try {
+    const vbs = path.join(UPDATE_DIR, 'run-hidden.vbs');
+    fs.writeFileSync(vbs,
+      'CreateObject("WScript.Shell").Run """" & WScript.Arguments(0) & """ " & WScript.Arguments(1), 0, False\r\n',
+      'ascii');
+    const child = spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wscript.exe'),
+      ['//nologo', '//b', vbs, bat, arg], { detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true });
+    child.unref();
+    return child;
+  } catch (e) {
+    // 兜底：还是用 cmd，至少能更新，只是可能看到窗口
+    const child = spawn('cmd.exe', ['/c', bat, arg], { detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true });
+    child.unref();
+    return child;
+  }
+}
+
 /** 生成便携版覆盖脚本内容（纯 ASCII：路径通过参数传入，避免 cmd 用 GBK 解码 UTF-8 中文路径） */
 function buildPortableScript() {
   // 不传路径参数：脚本自己从所在目录（<ROOT>\data\updates）推算，
@@ -219,7 +238,7 @@ function buildPortableScript() {
     'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
     'if errorlevel 1 goto go',
     'set /a TRIES+=1',
-    'if %TRIES% GEQ 90 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
+    'if %TRIES% GEQ 40 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
     'ping -n 2 127.0.0.1 >nul',
     'goto wait',
     ':go',
@@ -257,9 +276,7 @@ function applyPortable(zipPath) {
   const bat = path.join(UPDATE_DIR, 'apply-update.bat');
   fs.writeFileSync(bat, buildPortableScript(), 'ascii');
   // 路径可能含空格/中文：带引号传入，cmd 才会当成单个参数
-  const child = spawn('cmd.exe', ['/c', bat, String(process.pid)], {
-    detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true
-  });
+  const child = spawnHidden(bat, String(process.pid));
   child.unref();
   log('便携版更新脚本已启动');
 }
@@ -281,12 +298,12 @@ function buildInstallerScript() {
     'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
     'if errorlevel 1 goto go',
     'set /a TRIES+=1',
-    'if %TRIES% GEQ 90 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
+    'if %TRIES% GEQ 40 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
     'ping -n 2 127.0.0.1 >nul',
     'goto wait',
     ':go',
     'echo [%date% %time%] install start "%SETUP%" >> "%LOG%"',
-    '"%SETUP%" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /LOG="%ROOT%\\data\\updates\\inno-install.log"',
+    '"%SETUP%" /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /LOG="%ROOT%\\data\\updates\\inno-install.log"',
     'echo [%date% %time%] install exit=%errorlevel% >> "%LOG%"',
     'ping -n 2 127.0.0.1 >nul',
     'set "ELECTRON_RUN_AS_NODE="',
@@ -302,9 +319,7 @@ function buildInstallerScript() {
 function applyInstaller(exePath) {
   const bat = path.join(UPDATE_DIR, 'apply-install.bat');
   fs.writeFileSync(bat, buildInstallerScript(), 'ascii');
-  const child = spawn('cmd.exe', ['/c', bat, String(process.pid)], {
-    detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true
-  });
+  const child = spawnHidden(bat, String(process.pid));
   child.unref();
   log('安装版更新脚本已启动');
 }
