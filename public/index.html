@@ -872,14 +872,15 @@
       align-items: flex-start;
       gap: 1px;
       line-height: 1.25;
-      max-width: 190px;
+      width: max-content;       /* 卡片宽度跟着站名/延迟文字走，不拉齐、不硬截断 */
+      max-width: 240px;
     }
     .source-tab .src-name {
       font-size: 12px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 170px;
+      max-width: 224px;
     }
     .source-tab .src-meta {
       font-size: 10px;
