@@ -1733,14 +1733,18 @@
         if (pg) pg.textContent = s.asset ? '（' + Math.round(s.asset.size / 1048576) + ' MB）' : '';
         return;
       }
-      txt.textContent = cur + (s.error ? '｜检查失败：' + s.error : '｜已是最新');
+      txt.textContent = cur + (s.error ? '｜检查失败：' + s.error : (s.latest ? '｜已是最新' : '｜尚未检查'));
       btn.textContent = '检查更新';
       if (pg) pg.textContent = s.lastCheck ? '上次检查 ' + new Date(s.lastCheck).toLocaleTimeString() : '';
     }
 
     async function refreshUpdateStatus() {
       try {
-        const s = await (await fetch('/api/update/status')).json();
+        let s = await (await fetch('/api/update/status')).json();
+        // 还没检查过（例如刚启动）就先走一次缓存检查，避免面板显示「已是最新」误导
+        if (!s.latest && !s.error) {
+          try { s = await (await fetch('/api/update/check?force=0', { method: 'POST' })).json(); } catch (e) {}
+        }
         window.__upd = s;
         renderUpdateUI(s);
         return s;

@@ -1733,7 +1733,7 @@ app.get('/api/update/status', (req, res) => {
 });
 
 app.post('/api/update/check', async (req, res) => {
-  try { res.json(await Updater.check(true)); } catch (e) { res.status(500).json({ error: e.message }); }
+  try { res.json(await Updater.check(String(req.query.force || '1') !== '0')); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/update/download', async (req, res) => {
@@ -1741,7 +1741,17 @@ app.post('/api/update/download', async (req, res) => {
 });
 
 app.post('/api/update/apply', (req, res) => {
-  try { res.json(Updater.apply()); } catch (e) { res.status(409).json({ error: e.message }); }
+  try {
+    const r = Updater.apply();
+    res.json(r);
+    // 更新脚本要等本进程退出才能覆盖文件：服务端自己触发退出，不依赖前端是否还活着
+    setTimeout(() => {
+      const has = process.emit('kimbox:quit');
+      if (!has) process.exit(0);
+    }, 1500);
+  } catch (e) {
+    res.status(409).json({ error: e.message });
+  }
 });
 
 /* ==================== 备份 ==================== */

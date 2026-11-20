@@ -895,7 +895,10 @@ if (!gotLock) {
   process.on('uncaughtException', (e) => logMain(`uncaughtException: ${e && e.stack ? e.stack : e}`));
   process.on('before-quit', () => logMain('before-quit'));
 
-  app.whenReady().then(async () => {
+  // 自动更新：服务端执行完覆盖后会发这个事件，由主进程退出，让更新脚本能替换文件
+process.on('kimbox:quit', () => { setTimeout(() => { try { app.quit(); } catch (e) {} }, 300); });
+
+app.whenReady().then(async () => {
     await startServer();
     setTimeout(createMainWindow, 300);
 
