@@ -201,15 +201,18 @@ async function download(force) {
 
 /** 生成便携版覆盖脚本内容（纯 ASCII：路径通过参数传入，避免 cmd 用 GBK 解码 UTF-8 中文路径） */
 function buildPortableScript() {
+  // 不传路径参数：脚本自己从所在目录（<ROOT>\data\updates）推算，
+  // 避免 cmd 引号/编码把中文或空格路径搞坏。只传一个 PID。
   return [
     '@echo off',
     'chcp 936 >nul',
     'setlocal',
-    'set "ROOT=%~1"',
-    'set "ZIP=%~2"',
-    'set "PID=%~3"',
+    'for %%A in ("%~dp0..\\..") do set "ROOT=%%~fA"',
+    'for /f "delims=" %%F in (\'dir /b "%~dp0*.zip" 2^>nul\') do set "ZIP=%~dp0%%F"',
+    'set "PID=%~1"',
     'set "TMPDIR=%ROOT%\\data\\updates\\extract"',
     'set "LOG=%ROOT%\\data\\updates\\apply.log"',
+    'if not exist "%ZIP%" ( echo [%date% %time%] no zip >> "%LOG%" & exit /b 1 )',
     'echo [%date% %time%] wait pid=%PID% >> "%LOG%"',
     'set /a TRIES=0',
     ':wait',
@@ -230,10 +233,7 @@ function buildPortableScript() {
     ')',
     'set "SRC=%TMPDIR%"',
     'if exist "%TMPDIR%\\KimBoxPC\\node_modules" set "SRC=%TMPDIR%\\KimBoxPC"',
-    'if not exist "%SRC%\\node_modules" (',
-    '  echo [%date% %time%] no node_modules, abort >> "%LOG%"',
-    '  exit /b 1',
-    ')',
+    'if not exist "%SRC%\\node_modules" ( echo [%date% %time%] no node_modules, abort >> "%LOG%" & exit /b 1 )',
     'echo [%date% %time%] copy >> "%LOG%"',
     'robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np >nul',
     'if errorlevel 8 (',
@@ -243,7 +243,10 @@ function buildPortableScript() {
     ')',
     'rmdir /s /q "%TMPDIR%" >nul 2>&1',
     'echo [%date% %time%] done, restart >> "%LOG%"',
+    'set "ELECTRON_RUN_AS_NODE="',
+    'pushd "%ROOT%"',
     'start "" "%ROOT%\\node_modules\\electron\\dist\\electron.exe" "%ROOT%"',
+    'popd',
     'del "%ZIP%" >nul 2>&1',
     'del "%~f0" >nul 2>&1',
     'exit /b 0'
@@ -254,20 +257,56 @@ function applyPortable(zipPath) {
   const bat = path.join(UPDATE_DIR, 'apply-update.bat');
   fs.writeFileSync(bat, buildPortableScript(), 'ascii');
   // 路径可能含空格/中文：带引号传入，cmd 才会当成单个参数
-  const child = spawn('cmd.exe', ['/c', bat, `"${ROOT}"`, `"${zipPath}"`, String(process.pid)], {
+  const child = spawn('cmd.exe', ['/c', bat, String(process.pid)], {
     detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true
   });
   child.unref();
   log('便携版更新脚本已启动');
 }
 
-/** 安装版：静默安装后重新拉起 */
+/** 安装版：等主进程退出 → 静默安装 → 重新拉起（生成纯 ASCII 的 bat，路径用参数传） */
+function buildInstallerScript() {
+  return [
+    '@echo off',
+    'chcp 936 >nul',
+    'setlocal',
+    'for %%A in ("%~dp0..\\..") do set "ROOT=%%~fA"',
+    'for /f "delims=" %%F in (\'dir /b "%~dp0*_Setup.exe" 2^>nul\') do set "SETUP=%~dp0%%F"',
+    'set "PID=%~1"',
+    'set "LOG=%ROOT%\\data\\updates\\apply.log"',
+    'if not exist "%SETUP%" ( echo [%date% %time%] no setup >> "%LOG%" & exit /b 1 )',
+    'echo [%date% %time%] wait pid=%PID% >> "%LOG%"',
+    'set /a TRIES=0',
+    ':wait',
+    'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
+    'if errorlevel 1 goto go',
+    'set /a TRIES+=1',
+    'if %TRIES% GEQ 90 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
+    'ping -n 2 127.0.0.1 >nul',
+    'goto wait',
+    ':go',
+    'echo [%date% %time%] install start "%SETUP%" >> "%LOG%"',
+    '"%SETUP%" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /LOG="%ROOT%\\data\\updates\\inno-install.log"',
+    'echo [%date% %time%] install exit=%errorlevel% >> "%LOG%"',
+    'ping -n 2 127.0.0.1 >nul',
+    'set "ELECTRON_RUN_AS_NODE="',
+    'pushd "%ROOT%"',
+    'start "" "%ROOT%\\node_modules\\electron\\dist\\electron.exe" "%ROOT%"',
+    'popd',
+    'del "%SETUP%" >nul 2>&1',
+    'del "%~f0" >nul 2>&1',
+    'exit /b 0'
+  ].join('\r\n');
+}
+
 function applyInstaller(exePath) {
-  const appExe = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
-  const cmd = `timeout /t 2 /nobreak >nul & "${exePath}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART & start "" "${appExe}" "${ROOT}"`;
-  const child = spawn('cmd.exe', ['/c', cmd], { detached: true, stdio: 'ignore', windowsHide: true });
+  const bat = path.join(UPDATE_DIR, 'apply-install.bat');
+  fs.writeFileSync(bat, buildInstallerScript(), 'ascii');
+  const child = spawn('cmd.exe', ['/c', bat, String(process.pid)], {
+    detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true
+  });
   child.unref();
-  log('静默安装已启动');
+  log('安装版更新脚本已启动');
 }
 
 function apply() {
@@ -291,4 +330,4 @@ function scheduleAutoCheck(delayMs = 20000) {
   if (t.unref) t.unref();
 }
 
-module.exports = { check, status, download, apply, scheduleAutoCheck, installMode, cmpVersion, buildPortableScript };
+module.exports = { check, status, download, apply, scheduleAutoCheck, installMode, cmpVersion, buildPortableScript, buildInstallerScript };
