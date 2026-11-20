@@ -4365,6 +4365,9 @@
     async function playEpisode(url, resumeAt = 0, opts = {}) {
       syncCacheUI();
       mediaHeaders = (opts && opts.headers) || {};
+      // 虫包 playerContent 给的地址可能是 http://127.0.0.1:<port>/...（本地代理），
+      // 没有 .m3u8 后缀但本身就能播；必须跳过「当网页解析」的分支。
+      let fromSpider = !!(opts && opts.spiderDirect);
       // 虫包（TVBox spider）站点：详情里给的是播放 id，真正地址要现问站源，
       // 顺带拿到 CDN 要求的 Referer/Origin 等请求头。
       if (currentDetail && currentDetail.spider && url && !DIRECT_MEDIA_RE.test(url)) {
@@ -4376,6 +4379,12 @@
           if (r.error || !r.url) throw new Error(r.error || '站源未返回播放地址');
           if (Number(r.parse) === 1) { showToast('该站源需要网页解析，暂不支持，请换源', 6000); return; }
           url = r.url;
+          fromSpider = true;
+          // 虫包返回的地址形态千奇百怪（127.0.0.1 代理、无后缀、带 token），
+          // 出问题时看 data/app.log 就能知道到底拿到了什么。
+          try {
+            fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: '[spider] play url=' + String(r.url).slice(0, 160) + ' header=' + String(r.header || '').slice(0, 80), src: 'spider' }) }).catch(function () {});
+          } catch (e) {}
           if (r.header) {
             try { mediaHeaders = JSON.parse(r.header) || {}; } catch (e) { mediaHeaders = {}; }
           }
@@ -4407,9 +4416,10 @@
       video.onerror = () => showToast('直连播放失败，可点右上角「用 PC 播放器播放」');
       showToast('正在加载视频...', 1500);
 
-      // 有些源给的是网页播放页，需要先解析出真实视频地址
+      // 有些源给的是网页播放页，需要先解析出真实视频地址；
+      // 虫包返回的地址已经是播放地址，不再走解析。
       let finalUrl = url;
-      if (!DIRECT_MEDIA_RE.test(url)) {
+      if (!fromSpider && !DIRECT_MEDIA_RE.test(url)) {
         showToast('该源需要解析播放地址，正在解析…', 8000);
         try {
           const r = await (await fetch(`/api/resolve?url=${encodeURIComponent(url)}`)).json();
@@ -4457,7 +4467,15 @@
       currentPlaylistDuration = 0;
       let proxyOk = false;
       let adRaw = null;
-      const isHls = /\.m3u8/i.test(finalUrl);
+      let isHls = /\.m3u8/i.test(finalUrl);
+      if (!isHls && fromSpider) {
+        // 虫包常给 http://127.0.0.1:<port>/... 这类没有后缀的地址：
+        // 读一小段内容判断真实类型；是 HLS 就走本地代理（带 .m3u8 后缀，播放器才认）。
+        try {
+          const sn = await (await fetch(`/api/sniff?url=${encodeURIComponent(finalUrl)}${headersQuery()}`)).json();
+          if (sn && sn.kind === 'hls') isHls = true;
+        } catch (e) {}
+      }
       if (isHls && adFilterEnabled()) {
         try {
           // 方式 2「剪辑」：让服务端把广告块删掉；失败则自动退回「跳过」的原有路径
@@ -4599,7 +4617,8 @@
         }
       };
 
-      if (playUrl.includes('.m3u8')) {
+      // 用 isHls 判断（虫包给的本地代理地址可能没有 .m3u8 后缀）
+      if (isHls || playUrl.includes('.m3u8')) {
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           // 「网页 (MSE)」用一套更激进的缓冲/预取参数（参考 KVideo 的配置），
           // 只影响这个新增引擎，默认 mpv 与 ffmpeg 兼容内核的行为保持不变。

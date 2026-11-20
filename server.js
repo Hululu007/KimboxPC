@@ -1726,6 +1726,50 @@ app.get('/api/version', (req, res) => {
   });
 });
 
+/* ==================== 地址内容嗅探 ==================== */
+// 虫包常给 http://127.0.0.1:<port>/... 这类没有后缀的地址：
+// mpv/hls.js 只按后缀选解复用器，会把 HLS 当普通文件而播不了。
+// 这里读回前几 KB 判断真实类型（只读一小段就断开，不会把整个直播流拉下来）。
+app.get('/api/sniff', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ kind: 'error', error: '缺少 url' });
+  let streamRef = null;
+  try {
+    const r = await axios.get(url, {
+      timeout: 10000,
+      responseType: 'stream',
+      headers: requestHeaders(req.query.headers),
+      maxRedirects: 5,
+      validateStatus: () => true
+    });
+    streamRef = r.data;
+    const ct = String(r.headers['content-type'] || '');
+    let head = Buffer.alloc(0);
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      r.data.once('data', (chunk) => { head = Buffer.from(chunk).slice(0, 4096); finish(); });
+      r.data.once('end', finish);
+      r.data.once('error', finish);
+      setTimeout(finish, 4000);
+    });
+    try { r.data.destroy(); } catch (e) {}
+    const text = head.toString('utf8');
+    let kind = '';
+    if (text.includes('#EXTM3U')) kind = 'hls';
+    else if (/mpegurl/i.test(ct)) kind = 'hls';
+    else if (head.length >= 8 && head.slice(4, 8).toString('latin1') === 'ftyp') kind = 'mp4';
+    else if (/^FLV/.test(head.slice(0, 3).toString('latin1'))) kind = 'flv';
+    else if (/^\x1a\x45\xdf\xa3/.test(head.slice(0, 4).toString('latin1'))) kind = 'mkv';
+    else if (/mp4|webm/i.test(ct)) kind = 'mp4';
+    else if (/flv/i.test(ct)) kind = 'flv';
+    res.json({ kind: kind || 'other', contentType: ct, status: r.status });
+  } catch (e) {
+    try { if (streamRef) streamRef.destroy(); } catch (err) {}
+    res.json({ kind: 'error', error: e.message });
+  }
+});
+
 /* ==================== 自动更新（GitHub Releases） ==================== */
 
 app.get('/api/update/status', (req, res) => {
