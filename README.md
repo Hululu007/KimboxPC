@@ -303,6 +303,25 @@ data/
 
 ---
 
+## 致谢与第三方组件
+
+本项目建立在这些开源项目之上（完整清单、版本与许可见 **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**）：
+
+| 项目 | 用途 | 许可 |
+| :-- | :-- | :-- |
+| [Electron](https://github.com/electron/electron) / [Node.js](https://nodejs.org/) | 桌面外壳与本地服务运行时 | MIT |
+| [Express](https://expressjs.com/) / [axios](https://axios-http.com/) / [cors](https://github.com/expressjs/cors) | 本地接口与 HTTP 请求 | MIT |
+| [mpv](https://mpv.io/) / libmpv 0.42 | 默认播放内核（软件渲染到 canvas） | GPLv2+ |
+| [FFmpeg](https://ffmpeg.org/) 9.0.2 | 兼容内核转封装（gyan.dev 构建，GPLv3） | GPLv3 |
+| [hls.js](https://github.com/video-dev/hls.js) / [mpegts.js](https://github.com/xqq/mpegts.js) | 网页内核 / 兼容内核的浏览器侧播放 | Apache-2.0 |
+| [xiugou-tv](https://github.com/KuekHaoYang/xiugou-tv) | 虫包（dex 站源）JVM 解析层：android-bridge、dex2jar、unidbg 解壳 | GPLv3 |
+| [OpenJDK](https://openjdk.org/) 21 | 运行上述 JVM 服务（随包 jlink 运行时） | GPLv2+CE |
+| [Vulkan-Loader](https://github.com/KhronosGroup/Vulkan-Loader) | libmpv 的 Vulkan 依赖 | Apache-2.0 |
+
+协议与接口规范参考 **[TVBox](https://github.com/q215613905/TVBoxOS)**、**[FongMi / CatVodSpider](https://github.com/FongMi/TV)**；安装包使用 [Inno Setup](https://jrsoftware.org/isinfo.php) 生成。
+
+> 感谢以上项目的作者与维护者。若署名或许可有误，欢迎提 Issue 更正。
+
 ## 许可证与免责声明
 
 - 本项目遵循开源理念，仅供个人技术研究、学习与影音协议解析测试之用；
