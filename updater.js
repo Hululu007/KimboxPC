@@ -260,7 +260,7 @@ function apply() {
 }
 
 /** 启动后延迟检查一次（不阻塞、不弹窗，交给前端决定是否提示） */
-function scheduleAutoCheck(delayMs = 20000) {
+function scheduleAutoCheck(delayMs = 8000) {
   loadState();
   const t = setTimeout(() => { check(false).catch(() => {}); }, delayMs);
   if (t.unref) t.unref();

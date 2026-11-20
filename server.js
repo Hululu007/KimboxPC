@@ -1980,7 +1980,7 @@ app.post('/api/play/external', async (req, res) => {
 
 const server = app.listen(PORT, HOST);
 // 启动 20 秒后后台查一次更新（不阻塞启动，失败静默）
-Updater.scheduleAutoCheck(20000);
+Updater.scheduleAutoCheck(8000);
 
 server.on('listening', async () => {
   writePid();

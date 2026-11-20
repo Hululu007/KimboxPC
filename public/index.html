@@ -850,6 +850,16 @@
     }
     .cfg-row button { padding: 5px 11px; font-size: 12px; }
 
+    /* 「管理」按钮上的新版本红点 */
+    #btnManager.has-update { position: relative; }
+    #btnManager.has-update::after {
+      content: '';
+      position: absolute; top: -3px; right: -3px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ff4d4f;
+      box-shadow: 0 0 0 2px #0e1114;
+    }
+
     .source-tabs {
       display: flex;
       flex-wrap: wrap;      /* 同片源多时自动换行、向下扩展，不再用横向滚动条 */
@@ -1115,7 +1125,7 @@
     <div class="config-box">
       <select id="configSelect" onchange="activateConfig(this.value)" title="配置源"></select>
       <button onclick="addConfig()" title="添加配置源">＋ 添加</button>
-      <button class="ghost-btn" onclick="openConfigManager()" title="管理配置源（可单独删除）">管理</button>
+      <button class="ghost-btn" id="btnManager" onclick="openConfigManager()" title="管理配置源（可单独删除）">管理</button>
       <button class="ghost-btn" onclick="openBackupPanel()" title="备份与还原">备份</button>
       <button class="ghost-btn" onclick="cleanAppCache()" title="清理本地海报图片与临时缓存（仅限 %APPDATA%，不影响收藏与历史）">清理缓存</button>
       <button class="ghost-btn" onclick="resetAll()" title="初始化：清空所有配置源、收藏与历史">初始化</button>
@@ -1191,6 +1201,7 @@
       <div class="cfg-sub" style="margin-top:10px" id="mUpdRow">
         版本更新：<span id="mUpdText">正在读取…</span>
         <button class="ghost-btn" style="margin-left:10px" id="mUpdBtn" onclick="updateAction()">检查更新</button>
+        <button class="ghost-btn" style="margin-left:6px" id="mUpdSkip" onclick="skipUpdateVersion()" title="不再自动提示这个版本（仍可在这里手动更新）">忽略此版本</button>
         <span id="mUpdProgress" style="color:var(--text-muted);font-size:12px;margin-left:8px"></span>
       </div>
 
@@ -1486,6 +1497,7 @@
       syncAdModeUI();
       if (adDebugOn()) toggleAdDebug(true);   // 上次开着就继续显示
       await bootstrap();
+      startupUpdateCheck(5000);   // 静默检查更新：有新版且没提示过这个版本才弹一次
     };
 
     async function loadVersion() {
@@ -1719,7 +1731,12 @@
       const txt = document.getElementById('mUpdText');
       const btn = document.getElementById('mUpdBtn');
       const pg = document.getElementById('mUpdProgress');
+      const skip = document.getElementById('mUpdSkip');
       if (!txt || !btn) return;
+      // 有新版且还没下载时才显示「忽略此版本」；顺便维护顶栏红点
+      const showSkip = !!s.hasUpdate && !s.downloaded && !s.downloading;
+      if (skip) skip.style.display = showSkip ? '' : 'none';
+      markUpdateBadge(showSkip);
       const modeTxt = s.mode === 'installer' ? '安装版' : '便携版';
       const cur = '当前 v' + s.current + '（' + modeTxt + '）';
       if (s.downloading) {
@@ -1753,6 +1770,21 @@
         renderUpdateUI(s);
         return s;
       } catch (e) { return null; }
+    }
+
+    // 顶栏「管理」按钮上的新版本红点
+    function markUpdateBadge(on) {
+      const b = document.getElementById('btnManager');
+      if (b) b.classList.toggle('has-update', !!on);
+    }
+
+    // 忽略当前这个版本（不再提示，但「管理」里仍可手动更新）
+    function skipUpdateVersion() {
+      const s = window.__upd;
+      if (!s || !s.latest) return;
+      localStorage.setItem('tvbox_upd_seen', s.latest.version);
+      markUpdateBadge(false);
+      showToast('已忽略 v' + s.latest.version + '，之后可在「管理 → 版本更新」里手动更新', 5000);
     }
 
     async function updateAction() {
@@ -1847,6 +1879,24 @@
       } catch (e) {}
     }
 
+    /* ---------- 启动静默检查（每个版本只提示一次） ---------- */
+    function startupUpdateCheck(delayMs) {
+      setTimeout(async () => {
+        let s = await refreshUpdateStatus();
+        // 后端启动 8 秒后才检查；结果没回来就继续等（最多约 30 秒），不打扰用户
+        for (let i = 0; i < 10 && s && !s.latest && !s.error; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          s = await refreshUpdateStatus();
+        }
+        if (!s || !s.hasUpdate) { markUpdateBadge(false); return; }
+        markUpdateBadge(true);
+        const seen = localStorage.getItem('tvbox_upd_seen') || '';
+        if (seen === s.latest.version) return;   // 这个版本已经提示过
+        localStorage.setItem('tvbox_upd_seen', s.latest.version);
+        showToast('发现新版本 v' + s.latest.version + '，可在顶栏「管理 → 版本更新」一键更新', 7000);
+      }, delayMs || 5000);
+    }
+
     async function restartJvm() {
       showToast('正在重启 JVM 站源服务…', 2500);
       try {
@@ -1857,15 +1907,6 @@
         showToast('重启失败：' + e.message, 5000);
       }
       refreshJvmStatus();
-      setTimeout(async () => {
-        const s = await refreshUpdateStatus();
-        if (s && s.hasUpdate) {
-          const seen = localStorage.getItem('tvbox_upd_seen') || '';
-          if (seen !== s.latest.version) {
-            showToast('发现新版本 v' + s.latest.version + '，可在顶栏「管理」里一键更新', 6000);
-          }
-        }
-      }, 6000);
     }
 
     function fillSiteSelect(sites, activeKey) {
