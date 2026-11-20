@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const ConfigParser = require('./configParser');
 const CmsEngine = require('./cmsEngine');
 const SpiderEngine = require('./spiderEngine');
+const Updater = require('./updater');
 const JvmBridge = require('./jvmBridge');
 const PlayerLauncher = require('./playerLauncher');
 const { ConfigRepo, HistoryRepo, FavoriteRepo, ShowMarkRepo, backup, listBackups, deleteBackup, restoreBackup } = require('./db');
@@ -1725,6 +1726,24 @@ app.get('/api/version', (req, res) => {
   });
 });
 
+/* ==================== 自动更新（GitHub Releases） ==================== */
+
+app.get('/api/update/status', (req, res) => {
+  try { res.json(Updater.status()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/update/check', async (req, res) => {
+  try { res.json(await Updater.check(true)); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/update/download', async (req, res) => {
+  try { res.json(await Updater.download(String(req.query.force || '') === '1')); } catch (e) { res.status(409).json({ error: e.message }); }
+});
+
+app.post('/api/update/apply', (req, res) => {
+  try { res.json(Updater.apply()); } catch (e) { res.status(409).json({ error: e.message }); }
+});
+
 /* ==================== 备份 ==================== */
 
 app.get('/api/backups', (req, res) => {
@@ -1902,6 +1921,8 @@ app.post('/api/play/external', async (req, res) => {
 });
 
 const server = app.listen(PORT, HOST);
+// 启动 20 秒后后台查一次更新（不阻塞启动，失败静默）
+Updater.scheduleAutoCheck(20000);
 
 server.on('listening', async () => {
   writePid();

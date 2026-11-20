@@ -635,6 +635,8 @@ function startRenderLoop() {
 }
 
 /* ---------- IPC ---------- */
+ipcMain.handle('shell:quit', () => { setTimeout(() => app.quit(), 50); return { ok: true }; });
+
 ipcMain.handle('shell:info', () => {
   let mpvVersion = null;
   try { loadNative(); mpvVersion = 'ok'; } catch (e) { mpvVersion = e.message; }

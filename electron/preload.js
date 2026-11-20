@@ -8,6 +8,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('kimbox', {
   isElectron: true,
   info: () => ipcRenderer.invoke('shell:info'),
+  quit: () => ipcRenderer.invoke('shell:quit'),
 
   // 播放控制
   open: (payload) => ipcRenderer.invoke('mpv:open', payload),

@@ -1184,6 +1184,12 @@
       <div class="cfg-sub">点「启用」切换到该配置源，点「删除」只删除这一条（不影响收藏与历史）。</div>
       <div id="cfgList"></div>
 
+      <div class="cfg-sub" style="margin-top:10px" id="mUpdRow">
+        版本更新：<span id="mUpdText">正在读取…</span>
+        <button class="ghost-btn" style="margin-left:10px" id="mUpdBtn" onclick="updateAction()">检查更新</button>
+        <span id="mUpdProgress" style="color:var(--text-muted);font-size:12px;margin-left:8px"></span>
+      </div>
+
       <div class="cfg-sub" style="margin-top:14px" id="mJvmRow">
         站源服务（JVM 虫包）：<span id="mJvmStatusText">未启动</span>
         <button class="ghost-btn" style="margin-left:10px" onclick="restartJvm()">重启服务</button>
@@ -1704,6 +1710,80 @@
       updateDefaultSiteUI();
     }
 
+    /* ---------- 自动更新（GitHub Releases） ---------- */
+    function renderUpdateUI(s) {
+      const txt = document.getElementById('mUpdText');
+      const btn = document.getElementById('mUpdBtn');
+      const pg = document.getElementById('mUpdProgress');
+      if (!txt || !btn) return;
+      const modeTxt = s.mode === 'installer' ? '安装版' : '便携版';
+      const cur = '当前 v' + s.current + '（' + modeTxt + '）';
+      if (s.downloading) {
+        txt.textContent = cur + '｜正在下载 ' + (s.progress || 0) + '%';
+        btn.textContent = '下载中…'; btn.disabled = true; if (pg) pg.textContent = ''; return;
+      }
+      btn.disabled = false;
+      if (s.downloaded) {
+        txt.textContent = cur + '｜新版本 v' + ((s.latest && s.latest.version) || '') + ' 已下载';
+        btn.textContent = '立即更新并重启'; if (pg) pg.textContent = ''; return;
+      }
+      if (s.hasUpdate) {
+        txt.textContent = cur + ' → 新版本 v' + s.latest.version;
+        btn.textContent = '下载更新';
+        if (pg) pg.textContent = s.asset ? '（' + Math.round(s.asset.size / 1048576) + ' MB）' : '';
+        return;
+      }
+      txt.textContent = cur + (s.error ? '｜检查失败：' + s.error : '｜已是最新');
+      btn.textContent = '检查更新';
+      if (pg) pg.textContent = s.lastCheck ? '上次检查 ' + new Date(s.lastCheck).toLocaleTimeString() : '';
+    }
+
+    async function refreshUpdateStatus() {
+      try {
+        const s = await (await fetch('/api/update/status')).json();
+        window.__upd = s;
+        renderUpdateUI(s);
+        return s;
+      } catch (e) { return null; }
+    }
+
+    async function updateAction() {
+      const s = window.__upd || await refreshUpdateStatus();
+      if (!s) { showToast('读取更新状态失败', 3000); return; }
+      if (s.downloading) { showToast('正在下载中，请稍候…', 2500); return; }
+      if (s.downloaded) {
+        if (!confirm('更新会退出程序、覆盖安装后自动重启（配置/收藏/历史都会保留）。继续？')) return;
+        try {
+          const r = await (await fetch('/api/update/apply', { method: 'POST' })).json();
+          if (r.error) throw new Error(r.error);
+          showToast(r.action === 'installer' ? '正在静默安装并重启…' : '正在解压覆盖并重启…', 5000);
+        } catch (e) { showToast('启动更新失败：' + e.message, 6000); return; }
+        setTimeout(() => {
+          try { if (window.kimbox && window.kimbox.quit) window.kimbox.quit(); } catch (e) {}
+        }, 2500);
+        return;
+      }
+      if (s.hasUpdate) {
+        showToast('开始下载新版本…', 3000);
+        renderUpdateUI(Object.assign({}, s, { downloading: true, progress: 0 }));
+        try {
+          const r = await (await fetch('/api/update/download', { method: 'POST' })).json();
+          if (r.error) throw new Error(r.error);
+        } catch (e) { showToast('下载失败：' + e.message, 6000); }
+        await refreshUpdateStatus();
+        return;
+      }
+      // 没有可用更新 → 手动检查
+      showToast('正在检查更新…', 2000);
+      try {
+        const r = await (await fetch('/api/update/check', { method: 'POST' })).json();
+        if (r.error) throw new Error(r.error);
+        window.__upd = r;
+        renderUpdateUI(r);
+        showToast(r.hasUpdate ? ('发现新版本 v' + r.latest.version) : (r.error ? '检查失败：' + r.error : '已是最新版本'), 3500);
+      } catch (e) { showToast('检查失败：' + e.message, 5000); }
+    }
+
     /** 拉取 JVM 站源服务状态：决定虫包站点是否可选、设置面板显示什么 */
     async function refreshJvmStatus() {
       try {
@@ -1759,6 +1839,15 @@
         showToast('重启失败：' + e.message, 5000);
       }
       refreshJvmStatus();
+      setTimeout(async () => {
+        const s = await refreshUpdateStatus();
+        if (s && s.hasUpdate) {
+          const seen = localStorage.getItem('tvbox_upd_seen') || '';
+          if (seen !== s.latest.version) {
+            showToast('发现新版本 v' + s.latest.version + '，可在顶栏「管理」里一键更新', 6000);
+          }
+        }
+      }, 6000);
     }
 
     function fillSiteSelect(sites, activeKey) {
@@ -2056,6 +2145,7 @@
     /* ==================== 配置源管理面板 ==================== */
     async function openConfigManager() {
       refreshJvmStatus();
+      refreshUpdateStatus();
       await renderConfigManager();
       document.getElementById('cfgMask').classList.add('show');
     }
