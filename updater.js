@@ -199,44 +199,51 @@ async function download(force) {
   return status();
 }
 
-/** 生成便携版覆盖脚本内容（单独抽出便于自检） */
-function buildPortableScript(zipPath) {
-  const appBat = path.join(ROOT, 'KimBoxPC-桌面版.bat');
-  const pid = process.pid;
+/** 生成便携版覆盖脚本内容（纯 ASCII：路径通过参数传入，避免 cmd 用 GBK 解码 UTF-8 中文路径） */
+function buildPortableScript() {
   return [
     '@echo off',
     'chcp 936 >nul',
-    'title KimBoxPC 正在更新',
     'setlocal',
-    `set "ROOT=${ROOT}"`,
-    `set "ZIP=${zipPath}"`,
+    'set "ROOT=%~1"',
+    'set "ZIP=%~2"',
+    'set "PID=%~3"',
     'set "TMPDIR=%ROOT%\\data\\updates\\extract"',
-    `echo 正在等待 KimBoxPC 退出...`,
+    'set "LOG=%ROOT%\\data\\updates\\apply.log"',
+    'echo [%date% %time%] wait pid=%PID% >> "%LOG%"',
+    'set /a TRIES=0',
     ':wait',
-    `tasklist /FI "PID eq ${pid}" 2>nul | find "${pid}" >nul`,
-    'if not errorlevel 1 (',
-    '  timeout /t 1 /nobreak >nul',
-    '  goto wait',
-    ')',
-    'echo 正在解压新版本...',
+    'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul',
+    'if errorlevel 1 goto go',
+    'set /a TRIES+=1',
+    'if %TRIES% GEQ 90 ( echo [%date% %time%] wait timeout >> "%LOG%" & goto go )',
+    'ping -n 2 127.0.0.1 >nul',
+    'goto wait',
+    ':go',
+    'echo [%date% %time%] extract >> "%LOG%"',
     'if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%" >nul 2>&1',
     'mkdir "%TMPDIR%" >nul 2>&1',
     'tar -xf "%ZIP%" -C "%TMPDIR%" >nul 2>&1',
     'if errorlevel 1 (',
-    '  powershell -NoProfile -Command "Expand-Archive -LiteralPath \'%ZIP%\' -DestinationPath \'%TMPDIR%\' -Force" >nul 2>&1',
+    '  echo [%date% %time%] tar failed, use Expand-Archive >> "%LOG%"',
+    '  powershell -NoProfile -Command "Expand-Archive -LiteralPath $env:ZIP -DestinationPath $env:TMPDIR -Force" >nul 2>&1',
     ')',
     'set "SRC=%TMPDIR%"',
     'if exist "%TMPDIR%\\KimBoxPC\\node_modules" set "SRC=%TMPDIR%\\KimBoxPC"',
     'if not exist "%SRC%\\node_modules" (',
-    '  echo 解压失败，请手动解压 "%ZIP%" 覆盖本目录。',
-    '  pause',
+    '  echo [%date% %time%] no node_modules, abort >> "%LOG%"',
     '  exit /b 1',
     ')',
-    'echo 正在覆盖文件...',
+    'echo [%date% %time%] copy >> "%LOG%"',
     'robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np >nul',
+    'if errorlevel 8 (',
+    '  echo [%date% %time%] robocopy retry >> "%LOG%"',
+    '  ping -n 3 127.0.0.1 >nul',
+    '  robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np >nul',
+    ')',
     'rmdir /s /q "%TMPDIR%" >nul 2>&1',
-    'echo 更新完成，正在启动...',
-    `start "" "${appBat}"`,
+    'echo [%date% %time%] done, restart >> "%LOG%"',
+    'start "" "%ROOT%\\node_modules\\electron\\dist\\electron.exe" "%ROOT%"',
     'del "%ZIP%" >nul 2>&1',
     'del "%~f0" >nul 2>&1',
     'exit /b 0'
@@ -245,8 +252,11 @@ function buildPortableScript(zipPath) {
 
 function applyPortable(zipPath) {
   const bat = path.join(UPDATE_DIR, 'apply-update.bat');
-  fs.writeFileSync(bat, buildPortableScript(zipPath), 'utf8');
-  const child = spawn('cmd.exe', ['/c', bat], { detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true });
+  fs.writeFileSync(bat, buildPortableScript(), 'ascii');
+  // 路径可能含空格/中文：带引号传入，cmd 才会当成单个参数
+  const child = spawn('cmd.exe', ['/c', bat, `"${ROOT}"`, `"${zipPath}"`, String(process.pid)], {
+    detached: true, stdio: 'ignore', cwd: UPDATE_DIR, windowsHide: true
+  });
   child.unref();
   log('便携版更新脚本已启动');
 }
