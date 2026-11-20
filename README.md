@@ -331,9 +331,12 @@ data/
 - 广告处理功能仅作用于**播放列表结构**，不下载、不修改源站内容，具体是否生效取决于源；
 ## 自动更新
 
-- 启动 20 秒后自动检查 GitHub Releases；有新版会在首页提示，也可在顶栏「管理」→「版本更新」里手动检查/下载/一键更新。
-- 安装版下载 `*_Setup.exe` 静默覆盖安装；便携版下载 `.zip` 后退出解压覆盖再重启。两者都保留 `data/`（配置源、收藏、历史、片头片尾标记）。
-- 更新日志在 `data/updates/update.log`。
+- 启动 20 秒后自动检查 GitHub Releases；有新版会在首页提示，也可在顶栏「管理」→「版本更新」里手动检查 / 下载。
+- **安装版**（目录里有 `unins000.exe`）：点更新后程序退出，直接启动 `Setup.exe /CLOSEAPPLICATIONS /NORESTART`——**弹出正常安装界面、能看到进度**，装完自动启动新版本。
+- **便携版**：不做自动替换（进程占用 + 目录结构各异，自动覆盖太脆）。下载后自动打开 `data\updates` 文件夹，手动解压覆盖程序目录即可。
+- 下载后按 GitHub Release 资产的 `digest`（sha256）校验完整性；进度按已收字节实时显示。
+- 两种形态都保留 `data/`（配置源、收藏、历史、片头片尾标记、虫包缓存）；更新日志在 `data\updates\update.log`。
+- 自动更新实现参考了 [xiugou-tv](https://github.com/KuekHaoYang/xiugou-tv) 的 `lib/core/update/`（安装版识别、可见安装、便携版只提示）。
 
 - 内置的 JVM 站源运行时来自 [xiugou-tv](https://github.com/KuekHaoYang/xiugou-tv)（GPLv3），未作修改，随包分发的许可文本与哈希见 `jvm\LICENSE-GPLv3.txt` 与 `jvm-manifest.json`；
 - 用户需自行甄别所添加接口的合法性，请支持正版影视作品。
