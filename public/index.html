@@ -4650,7 +4650,10 @@
       ).join('  ') || '<span class="ad-dim">无分块信息（该源不走代理）</span>';
 
       setSafeHTML(body, `<div><span class="ad-dim">剧集 </span>${escapeHtml(d.title || '-')}</div>` +
-        `<div><span class="ad-dim">方式 </span>${d.cut ? `剪辑（剔除 ${(d.cuts || []).length} 段 / ${Math.round(d.removed)}s）` : '跳过（播到广告处自动跳走）'}` +
+        `<div><span class="ad-dim">方式 </span>${d.wantCut ? '剪辑' : '跳过'}（设置）｜ 本次 ${d.cut
+          ? `剪辑：剔除 ${(d.cuts || []).length} 段 / ${Math.round(d.removed)}s`
+          : (!d.proxy ? '代理失败，直连播放（未做广告处理）'
+            : (d.wantCut ? '未改动列表（这次没有可剪的广告）' : '跳过：播到广告处自动跳走'))}` +
         `<span class="ad-dim">　来源 </span>${d.proxy ? '本地代理' : '直连'}` +
         `<span class="ad-dim">　片长 </span>${d.duration ? fmtAd(d.duration) : '--'}</div>` +
         rows +
@@ -4917,6 +4920,7 @@
         ranges: adRanges.slice(),
         chunks: (adRaw && Array.isArray(adRaw.chunks)) ? adRaw.chunks : [],
         mode: (adRaw && adRaw.mode) || (adMode() === 'cut' ? 'cut' : 'skip'),
+        wantCut: adMode() === 'cut',          // 用户设置的方式（顶栏下拉），和「本次是否真的剪了」分开
         cut: !!(adRaw && adRaw.cut),
         cuts: (adRaw && Array.isArray(adRaw.cuts)) ? adRaw.cuts : [],
         removed: (adRaw && Number(adRaw.removedSeconds)) || 0
