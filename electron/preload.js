@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('kimbox', {
   isElectron: true,
   info: () => ipcRenderer.invoke('shell:info'),
   quit: () => ipcRenderer.invoke('shell:quit'),
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
   // 播放控制
   open: (payload) => ipcRenderer.invoke('mpv:open', payload),

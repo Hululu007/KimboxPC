@@ -1305,6 +1305,7 @@
         版本更新：<span id="mUpdText">正在读取…</span>
         <button class="ghost-btn" style="margin-left:10px" id="mUpdBtn" onclick="updateAction()">检查更新</button>
         <button class="ghost-btn" style="margin-left:6px" id="mUpdSkip" onclick="skipUpdateVersion()" title="不再自动提示这个版本（仍可在这里手动更新）">忽略此版本</button>
+        <button class="ghost-btn" style="margin-left:6px" onclick="openReleasesPage()" title="在浏览器打开 GitHub 发布页（历史版本 / 更新说明）">GitHub 发布页 ↗</button>
         <button class="ghost-btn" style="margin-left:6px" id="mUpdClean" onclick="cleanUpdateCache()" title="删除 data\updates 里的旧安装包（每个约 300MB）">清理更新缓存</button>
         <span id="mUpdCache" style="color:var(--text-muted);font-size:12px;margin-left:6px"></span>
         <span id="mUpdProgress" style="color:var(--text-muted);font-size:12px;margin-left:8px"></span>
@@ -1871,6 +1872,20 @@
     }
 
     // 更新缓存占用（data\updates 里的安装包）
+    // 在系统浏览器打开 GitHub 发布页（桌面版走 IPC，浏览器模式退回新标签）
+    function openReleasesPage() {
+      const url = 'https://github.com/jacurtwong/KimboxPC/releases';
+      try {
+        if (window.kimbox && window.kimbox.openExternal) {
+          window.kimbox.openExternal(url).then(function (r) {
+            if (r && r.ok === false) showToast('打开失败：' + (r.error || ''), 4000);
+          }).catch(function () { showToast('打开失败，可手动访问：' + url, 5000); });
+        } else {
+          window.open(url, '_blank', 'noopener');
+        }
+      } catch (e) { showToast('打开失败：' + e.message, 4000); }
+    }
+
     async function refreshUpdateCache() {
       const el = document.getElementById('mUpdCache');
       if (!el) return;

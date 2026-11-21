@@ -646,6 +646,19 @@ function startRenderLoop() {
 }
 
 /* ---------- IPC ---------- */
+// 打开外部链接（GitHub 发布页等）：只放行 https，避免 file:// / 自定义协议被滥用
+ipcMain.handle('shell:open-external', async (e, url) => {
+  const u = String(url || '');
+  if (!/^https:\/\//i.test(u)) return { ok: false, error: '只允许 https 链接' };
+  try {
+    const { shell } = require('electron');
+    await shell.openExternal(u);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('shell:quit', () => { setTimeout(() => app.quit(), 50); return { ok: true }; });
 
 ipcMain.handle('shell:info', () => {
