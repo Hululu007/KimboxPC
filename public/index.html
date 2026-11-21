@@ -1843,9 +1843,10 @@
     async function refreshUpdateStatus() {
       try {
         let s = await (await fetch('/api/update/status')).json();
-        // 还没检查过（例如刚启动）就先走一次缓存检查，避免面板显示「已是最新」误导
-        if (!s.latest && !s.error) {
-          try { s = await (await fetch('/api/update/check?force=0', { method: 'POST' })).json(); } catch (e) {}
+        // 没检查过、或距上次检查超过 2 分钟：强制查一次，保证面板与红点显示真实最新（不被旧缓存误导）
+        const staleCheck = !s.lastCheck || (Date.now() - s.lastCheck > 2 * 60 * 1000);
+        if ((!s.latest && !s.error) || (staleCheck && !s.downloading)) {
+          try { s = await (await fetch('/api/update/check?force=1', { method: 'POST' })).json(); } catch (e) {}
         }
         window.__upd = s;
         renderUpdateUI(s);
@@ -1890,6 +1891,16 @@
         return;
       }
       if (s.hasUpdate) {
+        // 先强制查一次：缓存里可能还是上一个版本（比如 3.14.77），而现在已经出了 3.14.78
+        try {
+          const fresh = await (await fetch('/api/update/check?force=1', { method: 'POST' })).json();
+          if (fresh && !fresh.error) {
+            window.__upd = fresh;
+            renderUpdateUI(fresh);
+            if (!fresh.hasUpdate) { showToast('已是最新版本', 3000); return; }
+            if (fresh.latest && s.latest && fresh.latest.version !== s.latest.version) s = fresh;
+          }
+        } catch (e) {}
         showToast('开始下载新版本…', 3000);
         renderUpdateUI(Object.assign({}, s, { downloading: true, progress: 0 }));
         // 不等接口返回（它要等整包下完），边下边轮询进度

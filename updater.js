@@ -22,8 +22,8 @@ const API = `https://api.github.com/repos/${REPO}/releases/latest`;
 const UPDATE_DIR = path.join(ROOT, 'data', 'updates');
 const STATE_FILE = path.join(UPDATE_DIR, 'state.json');
 const UA = 'KimBoxPC-Updater';
-const CHECK_INTERVAL = 6 * 60 * 60 * 1000;      // 已发现「比当前新」的版本：6 小时内不重复查（GitHub 未认证 60 次/小时）
-const CHECK_INTERVAL_IDLE = 30 * 60 * 1000;     // 缓存里没有更新的版本：最多压 30 分钟就重查，不然发版后用户永远看不到红点
+const CHECK_INTERVAL = 15 * 60 * 1000;       // 已发现「比当前新」的版本：15 分钟内不重复查（避免频繁打 GitHub）
+const CHECK_INTERVAL_IDLE = 15 * 60 * 1000;     // 缓存里没有更新的版本：同样 15 分钟重查一次
 
 let pkg = { version: '0.0.0' };
 try { pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); } catch (e) {}
