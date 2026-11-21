@@ -443,6 +443,19 @@
     }
 
     /* ===== 广告调试面板（D 键或顶栏 🐞 开关） ===== */
+    /* 更新按钮：有新版/已下载时用亮青色，一眼能看到 */
+    .ghost-btn.btn-update {
+      background: #22d3ee;
+      border: 1px solid #22d3ee;
+      color: #052a33;
+      font-weight: 700;
+    }
+    .ghost-btn.btn-update:hover {
+      background: #67e8f9;
+      border-color: #67e8f9;
+      color: #052a33;
+    }
+
     .ad-debug-meta {
       padding: 5px 10px;
       font-size: 11px;
@@ -1828,6 +1841,7 @@
       const pg = document.getElementById('mUpdProgress');
       const skip = document.getElementById('mUpdSkip');
       if (!txt || !btn) return;
+      btn.classList.remove('btn-update');   // 每次重绘先复位，只有「有更新/已下载」才加亮青色
       // 有新版且还没下载时才显示「忽略此版本」；顺便维护顶栏红点
       const showSkip = !!s.hasUpdate && !s.downloaded && !s.downloading;
       if (skip) skip.style.display = showSkip ? '' : 'none';
@@ -1836,16 +1850,19 @@
       const cur = '当前 v' + s.current + '（' + modeTxt + '）';
       if (s.downloading) {
         txt.textContent = cur + '｜正在下载 ' + (s.progress || 0) + '%';
-        btn.textContent = '下载中…'; btn.disabled = true; if (pg) pg.textContent = ''; return;
+        btn.textContent = '下载中…'; btn.disabled = true; btn.classList.remove('btn-update'); if (pg) pg.textContent = ''; return;
       }
       btn.disabled = false;
       if (s.downloaded) {
         txt.textContent = cur + '｜新版本 v' + ((s.latest && s.latest.version) || '') + ' 已下载';
-        btn.textContent = s.mode === 'installer' ? '立即更新（弹出安装程序）' : '打开下载文件夹'; if (pg) pg.textContent = ''; return;
+        btn.textContent = s.mode === 'installer' ? '立即更新（弹出安装程序）' : '打开下载文件夹';
+        btn.classList.add('btn-update');   // 已下载：亮青色，显眼
+        if (pg) pg.textContent = ''; return;
       }
       if (s.hasUpdate) {
         txt.textContent = cur + ' → 新版本 v' + s.latest.version;
         btn.textContent = '下载更新';
+        btn.classList.add('btn-update');   // 有新版：亮青色，显眼
         if (pg) pg.textContent = s.asset ? '（' + Math.round(s.asset.size / 1048576) + ' MB）' : '';
         return;
       }
