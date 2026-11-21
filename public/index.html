@@ -3038,12 +3038,8 @@
           }
           showSourceWarn(disc);
           if (!disc || silent) return;
-          // 兼容内核已经转封装，声音不会变调；其它情况如实提示
-          if (compatEnabled()) {
-            showToast(`该源有 ${disc} 处时间戳重置，已用兼容模式转封装，声音异常可换源`, 5000);
-          } else {
-            showToast(`该源有 ${disc} 处时间戳重置，网页播放可能出现声音异常；可开启兼容模式或切 mpv`, 5500);
-          }
+          // mpv 内核不受时间戳重置影响，只做温和提示（旧代码这里引用了已删除的 compatEnabled，会抛错）
+          showToast(`该源有 ${disc} 处时间戳重置；mpv 内核不受影响，若出现异常可换源`, 5000);
         })
         .catch(() => {});
     }
@@ -3068,32 +3064,7 @@
     }
     function isMpv() { return engineMode() === 'mpv'; }
 
-    function initEngineSel() {
-      const sel = document.getElementById('engineSel');
-      if (sel) sel.value = engineMode();
-    }
 
-    async function changeEngine(v) {
-      const prev = engineMode();
-      const keepPos = currentAbsPos();
-
-      // 引擎切换必须先彻底停掉旧引擎（特别是兼容模式与转封装进程），避免两路同时出声或并发冲突卡死
-      if (prev !== v) {
-        try { pvVideo.pause(); } catch (e) {}
-        try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
-        if (prev === 'mpv') {
-          await stopMpvPlayback();
-        }
-      }
-
-      try { localStorage.setItem('tvbox_engine', v); } catch (e) {}
-      syncEngineUI();
-
-      if (v === 'mpv') showToast('已切换到 mpv 内核，正在重载…', 2500);
-      else showToast('已切换到 ffmpeg 兼容内核，正在重载…', 2500);
-
-      if (currentDetail) reloadCurrentEpisode(true, keepPos);
-    }
 
     function syncEngineUI() {
       const mode = engineMode();            // 现在恒为 mpv
