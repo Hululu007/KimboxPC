@@ -1146,6 +1146,33 @@
     }
     .boss-web-overlay.show { display: flex; }
   
+    /* 回到顶部：滚动超过一屏后出现在右下角 */
+    .back-to-top {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: rgba(27, 31, 36, 0.92);
+      color: var(--text);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 0.18s, transform 0.18s, background 0.18s;
+      z-index: 40;
+    }
+    .back-to-top.show { opacity: 1; transform: none; pointer-events: auto; }
+    .back-to-top:hover { background: var(--accent); border-color: var(--accent); }
+
     /* 键盘用户：只在键盘导航时显示焦点环（鼠标点击不出现） */
     :focus-visible {
       outline: 2px solid var(--accent);
@@ -2574,6 +2601,30 @@
         showStatus('加载视频失败: ' + e.message);
       }
     }
+
+    /* ---------- 回到顶部（右下角悬浮按钮） ---------- */
+    (function initBackTop() {
+      // 按钮在 body 末尾，主脚本在它之前执行：等 DOM 就绪再绑定
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initBackTop, { once: true });
+        return;
+      }
+      const btn = document.getElementById('btnBackTop');
+      if (!btn) return;
+      let ticking = false;
+      const sync = () => btn.classList.toggle('show', window.scrollY > 600);
+      window.addEventListener('scroll', () => {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(() => { ticking = false; sync(); });
+      }, { passive: true });
+      btn.addEventListener('click', () => {
+        // 尊重系统「减少动态效果」：不要平滑滚动
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' });
+      });
+      sync();
+    })();
 
     // 滚动到底部附近时自动加载下一页
     let scrollTick = 0;
@@ -5908,6 +5959,7 @@
     <div style="font-size: 12px; opacity: 0.4;">按快捷键或点击任意处唤醒并手动播放</div>
   </div>
 
+<button class="back-to-top" id="btnBackTop" type="button" aria-label="回到顶部" title="回到顶部">↑</button>
 </body>
 </html>
 
