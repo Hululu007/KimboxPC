@@ -96,6 +96,16 @@ if (process.env.TVBOX_WATCH_PARENT === '1') {
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+// 安全响应头（CSP / Trusted Types）：必须在静态资源之前注册，否则 index.html 不带这些头
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', "require-trusted-types-for 'script'; trusted-types kimbox-html default;");
+  // 资源白名单先 Report-Only：不拦截，违规经 securitypolicyviolation 写进 data/app.log 观察
+  res.setHeader('Content-Security-Policy-Report-Only',
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; connect-src 'self' https: http: ws: wss:; " +
+    "worker-src 'self' blob:; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';");
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const CONFIG_CACHE_DIR = path.join(__dirname, 'data', 'cache');

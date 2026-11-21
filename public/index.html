@@ -5,6 +5,7 @@
   <!-- Trusted Types 强制：所有 DOM XSS 汇聚点（innerHTML/outerHTML/insertAdjacentHTML/Worker 等）只接受经策略校验的值。
        策略在下面的内联脚本里创建（必须早于任何其它脚本，且是 head 的最早标签之一才会生效）。 -->
   <meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types kimbox-html default;">
+
   <script>
     /* Trusted Types 策略：本站自己的模板走 kimbox-html；第三方库/漏改的写入落到 default（同样校验）。
        这里的校验不重排 HTML（否则会把我们依赖的 class/style/onclick 剥掉），而是拦截脚本注入面：
@@ -1650,7 +1651,7 @@
           showStatus(
             `<div style="font-size:15px;margin-bottom:8px;">配置源「${cfgName}」加载超时${errDetail}</div>` +
             `<div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">请检查网络或配置源地址是否可访问</div>` +
-            `<button class="secondary" style="padding:6px 18px;" onclick="bootstrap(true)">🔄 重新拉取</button>`
+            `<button class="secondary" style="padding:6px 18px;" data-act="reload-config">🔄 重新拉取</button>`
           );
           return;
         }
@@ -2265,11 +2266,11 @@
 
         const main = document.createElement('div');
         main.className = 'cfg-main';
-        main.innerHTML = `
+        setSafeHTML(main, `
           <div class="cfg-name"></div>
           <div class="cfg-url"></div>
           <div class="cfg-hint" style="font-size:11px; margin-top:3px; display:none;"></div>
-        `;
+        `);
         main.querySelector('.cfg-name').textContent = c.name || c.url;
         main.querySelector('.cfg-url').textContent = c.url;
         const hintEl = main.querySelector('.cfg-hint');
@@ -2503,14 +2504,14 @@
       const groups = (spiderFilters && spiderFilters[String(tid)]) || [];
       if (!groups.length) { bar.style.display = 'none'; bar.replaceChildren(); return; }
       const sel = spiderFilterSel[String(tid)] || {};
-      bar.innerHTML = groups.map(g => {
+      setSafeHTML(bar, groups.map(g => {
         const cur = sel[g.key] || '';
         const chip = (label, val, active) =>
-          `<span class="filter-chip${active ? ' active' : ''}" onclick="setSpiderFilter('${tid}','${g.key}','${String(val).replace(/'/g, "\\'")}')">${escapeHtml(label)}</span>`;
+          `<span class="filter-chip${active ? ' active' : ''}" data-tid="${escapeHtml(String(tid))}" data-key="${escapeHtml(String(g.key))}" data-val="${escapeHtml(String(val))}">${escapeHtml(label)}</span>`;
         const chips = [chip('全部', '', cur === '')]
           .concat((g.value || []).map(v => chip(v.n || v.v, v.v, cur === String(v.v))));
         return `<div class="filter-row"><span class="filter-name">${escapeHtml(g.name)}</span>${chips.join('')}</div>`;
-      }).join('');
+      }).join(''));
       bar.style.display = 'flex';
     }
 
@@ -2805,9 +2806,9 @@
         progress = `<div class="card-progress"><i style="width:${pct}%"></i></div>`;
       }
 
-      card.innerHTML = `
+      setSafeHTML(card, `
         <div class="poster-wrap">
-          <img src="${escapeHtml(v.vod_pic || fallback)}" referrerpolicy="no-referrer" loading="lazy" onerror="this.onerror=null;this.src='${fallback}'">
+          <img src="${escapeHtml(v.vod_pic || fallback)}" data-fallback="${escapeHtml(fallback)}" referrerpolicy="no-referrer" loading="lazy">
           ${v.vod_remarks ? `<div class="remarks">${escapeHtml(v.vod_remarks)}</div>` : ''}
           ${progress}
         </div>
@@ -2815,7 +2816,7 @@
           <div class="card-title">${escapeHtml(v.vod_name || '未知影片')}</div>
           ${v.siteName ? `<div class="card-site">${escapeHtml(v.siteName)}${v.sources > 1 ? ` <span class="src-count">· ${v.sources} 个源</span>` : ''}</div>` : ''}
         </div>
-      `;
+      `);
 
       const star = document.createElement('button');
       star.className = 'card-star' + (v.faved ? ' on' : '');
@@ -3049,14 +3050,14 @@
       const subSel = document.getElementById('subSel');
       const audSel = document.getElementById('audioSel');
 
-      subSel.innerHTML = '<option value="no">关闭字幕</option>' +
-        subs.map(t => `<option value="${t.id}">${escapeHtml(t.title || t.lang || ('字幕 ' + t.id))}${t.external ? '（外挂）' : ''}</option>`).join('');
+      setSafeHTML(subSel, '<option value="no">关闭字幕</option>' +
+        subs.map(t => `<option value="${t.id}">${escapeHtml(t.title || t.lang || ('字幕 ' + t.id))}${t.external ? '（外挂）' : ''}</option>`).join(''));
       if (String(data.sid) === 'no' || data.sid === false || subs.length === 0) subSel.value = 'no';
       else if (subs.some(s => String(s.id) === String(data.sid))) subSel.value = String(data.sid);
 
-      audSel.innerHTML = auds.length
+      setSafeHTML(audSel, auds.length
         ? auds.map(t => `<option value="${t.id}">${escapeHtml(t.title || t.lang || ('音轨 ' + t.id))}${t.external ? '（外挂）' : ''}</option>`).join('')
-        : '<option value="">（无音轨）</option>';
+        : '<option value="">（无音轨）</option>');
       if (auds.some(a => String(a.id) === String(data.aid))) audSel.value = String(data.aid);
     }
 
@@ -3442,7 +3443,7 @@
           box.appendChild(chip);
         });
       } catch (e) {
-        box.innerHTML = `<span class="src-loading">聚合失败: ${e.message}</span>`;
+        setSafeHTML(box, `<span class="src-loading">聚合失败: ${e.message}</span>`);
       }
     }
 
@@ -3704,11 +3705,61 @@
 
     let lastHistorySave = 0;
 
+    /* ==================== 事件委托（替代模板里的内联事件） ==================== */
+    // 生成的 HTML 里不再写 onclick/onerror，统一在这里委托处理，这样模板才能交给原生净化器。
+    document.addEventListener('click', (e) => {
+      const el = e.target;
+      if (!el || !el.closest) return;
+      const chip = el.closest('.filter-chip[data-tid]');
+      if (chip) { setSpiderFilter(chip.dataset.tid, chip.dataset.key, chip.dataset.val); return; }
+      const act = el.closest('[data-act]');
+      if (act) {
+        const name = act.dataset.act;
+        if (name === 'reload-config') bootstrap(true);
+        return;
+      }
+    }, true);
+    document.addEventListener('error', (e) => {
+      const img = e.target;
+      if (!img || img.tagName !== 'IMG' || !img.dataset) return;
+      if (img.dataset.fallback && img.dataset.fbDone !== '1') {
+        img.dataset.fbDone = '1';
+        img.src = img.dataset.fallback;   // 海报加载失败时换成占位图
+      }
+    }, true);
+
     /* ==================== Trusted Types ==================== */
     // 显式走校验策略写入 HTML（策略在 head 里创建，见 __ttHTML）；返回 undefined 时退化为字符串写入，
     // 此时仍会经过 default 策略校验，不会被绕过。
+    // 原生 Sanitizer 白名单：只放行我们模板用到的元素与属性（不放行任何 on* 事件属性）。
+    const KIMBOX_SANITIZER = (() => {
+      if (typeof Sanitizer === 'undefined') return null;
+      try {
+        return new Sanitizer({
+          allowElements: ['a', 'b', 'br', 'button', 'code', 'dd', 'div', 'dl', 'dt', 'em', 'h1', 'h2', 'h3', 'h4',
+            'hr', 'i', 'img', 'input', 'label', 'li', 'ol', 'option', 'p', 'pre', 'select', 'small', 'source', 'span',
+            'strong', 'svg', 'path', 'g', 'circle', 'rect', 'line', 'polyline', 'polygon', 'title', 'tspan', 'text',
+            'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul', 'u', 's', 'sub', 'sup', 'mark', 'abbr', 'time', 'progress'],
+          allowAttributes: {
+            'class': ['*'], 'style': ['*'], 'id': ['*'], 'src': ['*'], 'href': ['*'], 'alt': ['*'], 'title': ['*'],
+            'width': ['*'], 'height': ['*'], 'loading': ['*'], 'referrerpolicy': ['*'], 'role': ['*'],
+            'aria-hidden': ['*'], 'aria-label': ['*'], 'viewbox': ['*'], 'd': ['*'], 'fill': ['*'], 'stroke': ['*'],
+            'stroke-width': ['*'], 'stroke-linecap': ['*'], 'stroke-linejoin': ['*'], 'opacity': ['*'], 'cx': ['*'],
+            'cy': ['*'], 'r': ['*'], 'x': ['*'], 'y': ['*'], 'x1': ['*'], 'x2': ['*'], 'y1': ['*'], 'y2': ['*'],
+            'points': ['*'], 'transform': ['*'], 'value': ['*'], 'type': ['*'], 'selected': ['*'], 'disabled': ['*'],
+            'placeholder': ['*'], 'readonly': ['*'], 'colspan': ['*'], 'rowspan': ['*']
+          }
+        });
+      } catch (e) { return null; }
+    })();
+
+    // 写入 HTML 的统一入口：优先用原生净化（setHTML + 白名单 Sanitizer），
+    // 环境不支持时退回 Trusted Types 策略校验（两者都不会执行脚本）。
     function setSafeHTML(el, html) {
       if (!el) return;
+      if (el.setHTML && KIMBOX_SANITIZER) {
+        try { el.setHTML(html, { sanitizer: KIMBOX_SANITIZER }); return; } catch (e) {}
+      }
       el.innerHTML = window.__ttHTML ? window.__ttHTML.createHTML(html) : html;
     }
 
@@ -4413,14 +4464,13 @@
         `<span class="${c.ad ? 'ad-row' : 'ad-dim'}">${i}:${Number(c.d).toFixed(0)}s/${c.n}${c.ad ? '★' : ''}</span>`
       ).join('  ') || '<span class="ad-dim">无分块信息（该源不走代理）</span>';
 
-      body.innerHTML =
-        `<div><span class="ad-dim">剧集 </span>${escapeHtml(d.title || '-')}</div>` +
+      setSafeHTML(body, `<div><span class="ad-dim">剧集 </span>${escapeHtml(d.title || '-')}</div>` +
         `<div><span class="ad-dim">方式 </span>${d.cut ? `剪辑（剔除 ${(d.cuts || []).length} 段 / ${Math.round(d.removed)}s）` : '跳过（播到广告处自动跳走）'}` +
         `<span class="ad-dim">　来源 </span>${d.proxy ? '本地代理' : '直连'}` +
         `<span class="ad-dim">　片长 </span>${d.duration ? fmtAd(d.duration) : '--'}</div>` +
         rows +
         `<div style="margin-top:6px"><span class="ad-dim">分块 </span>${chunkLine}</div>` +
-        `<div style="margin-top:6px" class="ad-dim">#n 开始–结束 (时长) → 目标；★ = 判定为广告</div>`;
+        `<div style="margin-top:6px" class="ad-dim">#n 开始–结束 (时长) → 目标；★ = 判定为广告</div>`);
 
       const pos = isMpv() ? (mpvState.position || 0) : (pvVideo.currentTime || 0);
       const idx = adRangeIndexAt(pos);
