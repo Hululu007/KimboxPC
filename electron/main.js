@@ -715,6 +715,29 @@ ipcMain.handle('mpv:open', (evt, payload) => {
   }
 });
 
+// 调试面板用：读取当前解码/渲染状态（静态属性，只在面板打开时每 2 秒读一次）
+ipcMain.handle('mpv:props', () => {
+  try {
+    if (!inst || !native) return { running: false };
+    const g = (k) => { try { return native.getProp(inst, k); } catch (e) { return null; } };
+    return {
+      running: true,
+      hwdec: g('hwdec'),
+      hwdecCurrent: g('hwdec-current'),
+      hwdecInterop: g('hwdec-interop'),
+      vo: g('vo-configured'),
+      format: g('video-format'),
+      width: g('width'),
+      height: g('height'),
+      dropped: g('frame-drop-count'),
+      cacheSecs: g('cache-secs'),
+      speed: g('speed')
+    };
+  } catch (e) {
+    return { running: false, error: e.message };
+  }
+});
+
 ipcMain.handle('mpv:cmd', (evt, { name, args }) => {
   try {
     if (!inst || !native) return { error: 'mpv 未启动' };

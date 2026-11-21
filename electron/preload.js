@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('kimbox', {
   // 播放控制
   open: (payload) => ipcRenderer.invoke('mpv:open', payload),
   cmd: (name, args) => ipcRenderer.invoke('mpv:cmd', { name, args }),
+  props: () => ipcRenderer.invoke('mpv:props'),
   state: () => ipcRenderer.invoke('mpv:state'),
   stop: () => ipcRenderer.invoke('mpv:stop'),
   resize: (width, height) => ipcRenderer.invoke('mpv:resize', { width, height }),
