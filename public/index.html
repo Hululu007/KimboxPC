@@ -24,7 +24,7 @@
       }
       function checkScriptURL(value) {
         var s = String(value == null ? '' : value);
-        // 只放行本地同源、blob:（hls.js 的 Worker）与 https
+        // 只放行本地同源、blob: 与 https
         if (/^(blob:|https:\/\/|http:\/\/127\.0\.0\.1|http:\/\/localhost|\/)/i.test(s)) return s;
         throw new TypeError('KimBoxPC: 被 Trusted Types 拦截的脚本地址');
       }
@@ -40,8 +40,6 @@
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KimBoxPC 版</title>
-  <script src="vendor/hls.min.js"></script>
-  <script src="vendor/mpegts.js"></script>
   <style>
     :root {
       --bg: #111418;
@@ -1576,7 +1574,6 @@
     let currentDetail = null;
     let currentSourceIdx = 0;
     let currentEpIdx = 0;
-    let hls = null;
     let activeSiteKey = '';
 
     /* ==================== 配置源管理 ==================== */
@@ -3013,7 +3010,6 @@
         // AbortSignal.timeout() 自带超时，不用再维护控制器与定时器
         const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}${headersQuery()}`, { signal: AbortSignal.timeout(timeoutMs) });
         const d = await r.json();
-        if (d && d.duration && !currentPlaylistDuration) compat.duration = d.duration;
         probeMemo.set(url, d);
         if (probeMemo.size > 60) probeMemo.delete(probeMemo.keys().next().value);
         return d;
@@ -3038,7 +3034,6 @@
           window.__lastProbe = { disc: disc, duration: (d && d.duration) || 0, segments: (d && d.segments) || 0, at: Date.now() };
           if (adDebugOn()) { try { renderAdDebug(true); } catch (e) {} }
           if (d && d.duration) {
-            if (!currentPlaylistDuration) compat.duration = d.duration;
             updateControls();
           }
           showSourceWarn(disc);
@@ -3084,8 +3079,6 @@
 
       // 引擎切换必须先彻底停掉旧引擎（特别是兼容模式与转封装进程），避免两路同时出声或并发冲突卡死
       if (prev !== v) {
-        destroyCompat();
-        if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
         try { pvVideo.pause(); } catch (e) {}
         try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
         if (prev === 'mpv') {
@@ -3299,8 +3292,6 @@
     }
 
     async function openMpv(url, startAt = 0, headers) {
-      destroyCompat();
-      if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
       try { pvVideo.pause(); } catch (e) {}
       try { pvVideo.removeAttribute('src'); pvVideo.load(); } catch (e) {}
 
@@ -3388,7 +3379,6 @@
       } catch (e) {}
     }
     // 问题：部分源带 DISCONTINUITY，Chrome MSE 音频渲染会出错（变调/发闷）。
-    // 方案：/api/remux 用 ffmpeg -c copy 重排时间戳后以 MPEG-TS 供流，mpegts.js 播放。
     // 拖动 = 以新位置重启 ffmpeg（约 2~3 秒）。
 
     /** 尝试播放；被浏览器拦截时弹出「点击继续播放」遮罩 */
@@ -3419,104 +3409,6 @@
       tryPlay();
     }
 
-    const compat = { on: false, player: null, url: '', base: 0, duration: 0 };
-
-    function compatEnabled() {
-      // 默认开启：浏览器引擎下用它规避时间戳重置导致的音频异常
-      try { const v = localStorage.getItem('tvbox_compat'); return v === null ? true : v === '1'; } catch (e) { return true; }
-    }
-
-    async function toggleCompat(v) {
-      if (v) {
-        // 开启前确认服务端有 ffmpeg
-        try {
-          const st = await (await fetch('/api/remux/status')).json();
-          if (!st.available) {
-            showToast('未找到 ffmpeg，兼容模式不可用（请安装 ffmpeg 或放到 PATH）', 6000);
-            document.getElementById('compatChk').checked = false;
-            return;
-          }
-        } catch (e) {}
-      }
-      try { localStorage.setItem('tvbox_compat', v ? '1' : '0'); } catch (e) {}
-      // 切模式后重载当前集
-      if (currentDetail) reloadCurrentEpisode(true);
-    }
-
-    window.kimboxIsCompatPlaying = () => !!(compat && compat.on && compat.player);
-
-    function destroyCompat() {
-      compat.on = false;
-      compat.retries = 0;
-      compat.url = '';
-      if (compat.player) {
-        try { compat.player.pause(); } catch (e) {}
-        try { compat.player.unload(); } catch (e) {}
-        try { compat.player.detachMediaElement(); } catch (e) {}
-        try { compat.player.destroy(); } catch (e) {}
-        compat.player = null;
-      }
-    }
-
-    /** 用转封装流起播（startAt 为整片秒数） */
-    function playCompat(url, startAt) {
-      destroyCompat();
-      compat.on = true;
-      compat.url = url;
-      compat.base = Math.max(0, Math.floor(startAt || 0));
-
-      // 请求头必须带上（虫包/CDN 常校验 Referer/Origin，缺了 ffmpeg 会 403 退出）
-      // ffmpeg 只认绝对地址：广告代理给的是 /api/hls/xxx.m3u8 这种相对路径，必须补全成 http://127.0.0.1:3980/...
-      const absUrl = (() => { try { return new URL(url, location.href).href; } catch (e) { return url; } })();
-      const src = `/api/remux?url=${encodeURIComponent(absUrl)}&start=${compat.base}${headersQuery()}`;
-      showToast(`兼容模式：正在转封装（从 ${fmtTime(compat.base)} 开始）…`, 4000);
-
-      try {
-        const player = mpegts.createPlayer(
-          { type: 'mpegts', isLive: false, url: src },
-          {
-            enableWorker: false,
-            lazyLoad: false,
-            liveBufferLatencyChasing: false,
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 60,
-            autoCleanupMinBackwardDuration: 30
-          }
-        );
-        compat.player = player;
-        player.attachMediaElement(pvVideo);
-        player.on(mpegts.Events.ERROR, (t, d) => {
-          showToast('兼容模式播放出错：' + (d || t), 4000);
-          // ffmpeg 进程意外退出时，按当前位置重启一次转封装（避免整集卡死）
-          if (!compat.on || compat.retries >= 1) return;
-          compat.retries = (compat.retries || 0) + 1;
-          const pos = Math.max(0, Math.floor(currentAbsPos()));
-          setTimeout(() => { if (compat.on) { try { compatSeek(pos); } catch (e) {} } }, 1200);
-        });
-        player.load();
-
-        // 数据就绪后再尝试播放；若被浏览器拦截，改为显示「点击继续播放」
-        const onReady = () => { tryPlay(); };
-        pvVideo.addEventListener('canplay', onReady, { once: true });
-        tryPlay();
-        setTimeout(() => { if (pvVideo.paused && pvVideo.readyState >= 2) showPlayOverlay(); }, 4000);
-      } catch (e) {
-        showToast('兼容模式启动失败: ' + e.message, 4000);
-        compat.on = false;
-      }
-    }
-
-    /** 兼容模式下的绝对播放位置 */
-    function compatPosition() {
-      return compat.base + (pvVideo.currentTime || 0);
-    }
-
-    /** 兼容模式下跳转：重启 ffmpeg */
-    function compatSeek(target) {
-      if (!compat.url) return;
-      showToast(`正在跳转到 ${fmtTime(target)}…`, 3000);
-      playCompat(compat.url, target);
-    }
 
     /* ==================== 同片源聚合（延迟排序） ==================== */
 
@@ -3914,7 +3806,6 @@
     // 此时 duration 也为 0；若照实保存就会把历史进度清零。
     function currentSavePosition() {
       if (isMpv()) return mpvState.position || 0;
-      if (compat.on) return compatPosition();
       const v = document.getElementById('h5Player');
       if (!v) return window.__lastGoodPos || 0;
       const ready = isFinite(v.duration) && v.duration > 0 && v.readyState > 0;
@@ -4181,7 +4072,7 @@
     }
 
     /* ---------- 缓冲档位 ----------
-       影响 mpv 的 cache-secs 与 hls.js 的 maxBufferLength。
+       影响 mpv 的 cache-secs（缓冲秒数）。
        网络差就调大（牺牲起播速度换稳定），网络好可以调小。 */
     function cacheSecs() {
       try {
@@ -4247,7 +4138,7 @@
         speed = mpvState.cacheSpeed || 0; rate = mpvState.speed || 1;
       } else {
         w = pvVideo.videoWidth || 0; h = pvVideo.videoHeight || 0;
-        pos = compat.on ? compatPosition() : (pvVideo.currentTime || 0);
+        pos = pvVideo.currentTime || 0;
         dur = seekDuration();
         rate = pvVideo.playbackRate || 1;
       }
@@ -4286,7 +4177,6 @@
     function currentAbsPos() {
       try {
         if (isMpv()) return mpvState.position || 0;
-        if (compat.on) return compatPosition() || 0;
         return isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0;
       } catch (e) { return 0; }
     }
@@ -4490,21 +4380,12 @@
       }
 
       // 兼容模式的片尾广告：重启 ffmpeg 到片尾要等十几秒，等于白等，直接进下一集
-      if (ranges[i][3] === 1 && compat.on) {
-        adSkipGuard = Date.now();
-        adSkipLocked = i;
-        showToast('已跳过片尾广告', 1800);
-        playNextEpisode();
-        return true;
-      }
 
       adSkipGuard = Date.now();
       adSkipLocked = i;
       try {
         if (isMpv()) {
           mpvCmd('seek', [target, 'absolute']);
-        } else if (compat.on) {
-          compatSeek(target);
         } else if (pvVideo) {
           pvVideo.currentTime = target;
         }
@@ -4600,15 +4481,9 @@
         const w = (v && v.videoWidth) || 0, h = (v && v.videoHeight) || 0;
         let dropped = '?';
         try { const q = v && v.getVideoPlaybackQuality && v.getVideoPlaybackQuality(); if (q) dropped = q.droppedVideoFrames; } catch (e) {}
-        text = '内核 ffmpeg 兼容' + (compat.on ? '（转封装）' : '') + ' ｜ 解码 浏览器\n' +
+        text = '内核 mpv\n' +
                (w && h ? w + 'x' + h : '未加载') + ' ｜ 丢帧 ' + dropped + ' ｜ 缓冲 ' + buf;
         // 转封装进程要是悄悄退了，这里能直接看到退出码
-        try {
-          const rs = await (await fetch('/api/remux/status')).json();
-          if (rs && rs.lastError && Date.now() - rs.lastError.at < 120000) {
-            text += '\n转封装 上次异常退出：code=' + rs.lastError.code;
-          }
-        } catch (e) {}
       }
       el.textContent = text;
     }
@@ -4633,7 +4508,6 @@
       if (!disc) return '时间戳连续（干净流，无需转封装）' + (extra ? ' ｜ ' + extra : '');
       let how;
       if (eng === 'mpv') how = 'mpv 内核不受影响';
-      else if (compat.on) how = '已转封装（ffmpeg copy）';
       else how = '网页播放可能声音异常，可切兼容/mpv';
       return '有 ' + disc + ' 处时间戳重置（脏流）→ ' + how + (extra ? ' ｜ ' + extra : '');
     }
@@ -4785,14 +4659,9 @@
       mpvState.duration = 0;
       const video = document.getElementById('h5Player');
 
-      // 彻底重置媒体元素：只销毁 hls 实例时，video 上残留的 MediaSource
+      // 彻底重置媒体元素：否则 video 上会残留上一集的 MediaSource
       // 会把旧的解码状态带到新流上，换源/切集后容易出现怪声
       try { video.pause(); } catch (e) {}
-      destroyCompat();
-      if (hls) {
-        try { hls.destroy(); } catch (e) {}
-        hls = null;
-      }
       video.removeAttribute('src');
       try { video.load(); } catch (e) {}
 
@@ -4898,7 +4767,7 @@
         if (adRanges.length) showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
       }
 
-      // 浏览器内核（hls.js）的时间轴是「连续拼接」，广告分片的时长也被算进去；
+      // 浏览器内核的时间轴是「连续拼接」，广告分片的时长也被算进去；
       // 而区间是按正片 PTS 算的（mpv 的 time-pos 走的也是 PTS），所以浏览器内核下必须把每段
       // 广告按「它前面所有广告的总时长」整体后移，否则会在广告真正出现前就跳走。
       if (!isMpv() && adRanges.length) {
@@ -4958,92 +4827,6 @@
       await stopMpvPlayback();   // 从 mpv 切回浏览器时，先停掉 mpv，避免两路同时出声
       setTimeout(updateVolumeUI, 300);
 
-      // 引擎模式：
-      //   mpv     → 上面已返回，走原生解码
-      //   browser → ffmpeg 兼容内核：一律走 ffmpeg 转封装（浏览器解码会声音异常）
-
-      // 兼容内核（browser）：干净流、脏流都交给 ffmpeg 转封装，
-      // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
-      if (/\.m3u8/i.test(finalUrl) || /\.m3u8/i.test(playUrl)) {
-        // 用普通探测判断「是否有时间戳重置」即可（不需要过滤后的统计了）
-        let info = await probeQuick(finalUrl, 8000, false);
-        if (!info || info.disc === undefined) {
-          info = await probeQuick(finalUrl, 8000, false);
-        }
-        // 片长优先用「本次实际加载的列表」的片长：剪辑模式下这份列表已经删掉广告，
-        // 而 probeQuick 探测的是另一份原始 CDN 列表，两者会差几十秒（进度条会错）。
-        if (currentPlaylistDuration > 0) compat.duration = currentPlaylistDuration;
-        else if (info && info.duration) compat.duration = info.duration;
-        // 兼容内核：一律转封装。浏览器解码（hls.js）在部分源上会声音异常，
-        // 干净流也走 ffmpeg，才能保证「兼容」名副其实。
-        playCompat(playUrl, resumeAt || 0);
-        probeAndWarn(finalUrl, true);
-        if (!window.__dirtyHintShown && info && info.disc > 0) {
-          window.__dirtyHintShown = true;
-          showToast('该源存在时间戳重置，已自动转封装以保证声音正常；拖动较慢，追求流畅可在面板切「mpv 内核」', 6000);
-        }
-        return;
-      }
-      destroyCompat();
-      probeAndWarn(finalUrl, false);
-
-      const seek = () => {
-        if (resumeAt > 1) {
-          try { video.currentTime = resumeAt; } catch (e) {}
-        }
-      };
-
-      // 用 isHls 判断（虫包给的本地代理地址可能没有 .m3u8 后缀）
-      if (isHls || playUrl.includes('.m3u8')) {
-        if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-          // 浏览器内核（兼容模式下的干净流）的 hls.js 参数
-          const hlsCfg = {
-            maxBufferLength: cacheSecs(),
-            maxMaxBufferLength: cacheSecs() * 2,
-            backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
-            enableWorker: true,
-            maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
-            enableCEA708Captions: false,
-            manifestLoadingTimeOut: 15000,
-            fragLoadingTimeOut: 20000,
-            // 虫包给的地址常要求 Referer/Origin：分片请求也要带上
-            xhrSetup: (xhr) => { try { for (const k in mediaHeaders) xhr.setRequestHeader(k, mediaHeaders[k]); } catch (e) {} }
-          };
-          hls = new Hls(hlsCfg);
-          hls.loadSource(playUrl);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            document.getElementById('pvToast').classList.remove('show');
-            // 多音轨流固定用第一条，避免播放中途自动切换造成突变
-            try {
-              if (hls.audioTracks && hls.audioTracks.length > 1) hls.audioTrack = 0;
-            } catch (e) {}
-            seek();
-            tryPlay();
-          });
-          // 音轨被切换时记录一下，便于定位
-          hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => { armAudioWatch(); });
-          hls.on(Hls.Events.ERROR, (evt, data) => {
-            if (data.fatal) {
-              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                showToast('线路加载失败，试试切换线路或外部播放器');
-              } else {
-                showToast('播放出错：' + (data.details || '未知错误'));
-              }
-            }
-          });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = finalUrl;
-          video.addEventListener('loadedmetadata', seek, { once: true });
-          video.play().catch(() => {});
-        } else {
-          showToast('当前浏览器不支持 HLS 播放');
-        }
-      } else {
-        video.src = finalUrl;
-        video.addEventListener('loadedmetadata', seek, { once: true });
-        video.play().catch(() => {});
-      }
     }
 
     // 播放中定期写入历史（节流在 saveHistory 内部）
@@ -5066,9 +4849,6 @@
       if (v && !v.paused) {
         try { v.pause(); } catch (e) {}
       }
-      if (compat && compat.player) {
-        try { compat.player.stopLoad(); } catch (e) {}
-      }
 
       const btnPlay = document.getElementById('btnPlay');
       if (btnPlay) btnPlay.innerHTML = ICON.play;
@@ -5086,7 +4866,7 @@
       const v = document.getElementById('h5Player');
       const curPos = isMpv()
         ? (mpvState.position || 0)
-        : (compat && compat.on ? compatPosition() : (v && isFinite(v.currentTime) ? v.currentTime : 0));
+        : (v && isFinite(v.currentTime) ? v.currentTime : 0);
 
       // 2. 若当前处于全屏状态，退出全屏避免遮挡弹出的 PC 播放器
       if (nativeFullscreen && isNativeShell()) {
@@ -5148,7 +4928,6 @@
 
     function closePlayer() {
       saveHistory(true);
-      destroyCompat();
       if (isMpv()) {
         stopMpvPolling();
         if (isNativeShell()) { if (frameUnsub) { try { frameUnsub(); } catch (e) {} frameUnsub = null; } window.kimbox.stop().catch(() => {}); }
@@ -5159,10 +4938,6 @@
       video.pause();
       video.removeAttribute('src');
       video.load();
-      if (hls) {
-        hls.destroy();
-        hls = null;
-      }
       document.getElementById('playerView').classList.remove('active');
       document.body.style.overflow = '';
       hidePlayOverlay();
@@ -5302,7 +5077,6 @@
     /** 当前可用的总时长（兼容模式用探测出来的真实时长） */
     function seekDuration() {
       if (isMpv()) return mpvState.duration || 0;
-      if (compat.on && compat.duration > 0) return compat.duration;
       const d = pvVideo.duration;
       return isFinite(d) ? d : 0;
     }
@@ -5310,7 +5084,7 @@
     const isSeekDragging = attachSlider(
       document.getElementById('seekBar'),
       (p) => {
-        // 拖动时只更新视觉与时间预览，松手才真正跳转（避免 HLS 频繁 SEEK）
+        // 拖动时只更新视觉与时间预览，松手才真正跳转
         seeking = true;
         paintSlider('seekFill', 'seekThumb', p);
         const dur = seekDuration();
@@ -5340,7 +5114,7 @@
     function seekBy(delta) {
       const d = seekDuration();
       const cur = isMpv() ? (mpvState.position || 0)
-        : (compat.on ? compatPosition() : (isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0));
+        : (isFinite(pvVideo.currentTime) ? pvVideo.currentTime : 0);
       let target = cur + delta;
       if (d > 0) target = Math.min(d - 1, Math.max(0, target));
       else target = Math.max(0, target);
@@ -5388,18 +5162,15 @@
     function seekTo(target) {
       if (!isFinite(target) || target < 0) return;
       if (isMpv()) { mpvCmd('seek', [target, 'absolute']); return; }
-      if (compat.on) { compatSeek(target); return; }
       const wasPlaying = !pvVideo.paused;
 
       if (wasPlaying) pvVideo.pause();
-      if (hls) { try { hls.stopLoad(); } catch (e) {} }
 
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
         pvVideo.removeEventListener('seeked', finish);
-        if (hls) { try { hls.startLoad(target); } catch (e) {} }
         if (wasPlaying) pvVideo.play().catch(() => {});
         updateControls();
       };
@@ -5425,8 +5196,6 @@
         try {
           if (isMpv()) {
             at = mpvState.position || 0;
-          } else if (compat.on) {
-            at = compatPosition() || 0;
           } else if (isFinite(pvVideo.currentTime)) {
             at = pvVideo.currentTime;
           }
@@ -5450,8 +5219,6 @@
 
     /** 初始化玩家选项（目前只剩兼容模式） */
     function initPlayerOptions() {
-      const cp = document.getElementById('compatChk');
-      if (cp) cp.checked = compatEnabled();
       const an = document.getElementById('autoNextChk');
       if (an) an.checked = autoNextEnabled();
     }
@@ -5462,7 +5229,7 @@
       const txt = document.getElementById('srcWarnText');
       if (!box || !txt) return;
       // mpv 内核不受脏流影响；兼容内核会自动转封装 —— 两种情况都不需要提示条
-      if (!disc || disc <= 0 || isMpv() || compatEnabled()) { box.style.display = 'none'; return; }
+      if (!disc || disc <= 0 || isMpv()) { box.style.display = 'none'; return; }
       txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
       box.style.display = 'flex';
     }
@@ -5562,14 +5329,12 @@
       // 播到广告区间就跳过去（区间由 /api/ads 预先给出，列表本身没被改动）
       // 跳广告优先判定，避免在跳过瞬间误触发自动切集；已判定"到片尾"时不再跳广告
       if (!eofHandled) {
-        const p0 = isMpv()
-          ? (mpvState.position || 0)
-          : (compat.on ? compatPosition() : (pvVideo.currentTime || 0));
+        const p0 = mpvState.position || 0;
         if (maybeSkipAd(p0)) return;
       }
       if (adDebugOn()) renderAdDebug();
       maybeAutoNext();
-      if (isMpv() || compat.on || (pvVideo && pvVideo.duration > 0 && pvVideo.readyState > 0)) saveHistory(false);
+      saveHistory(false);
       if (osdEnabled()) renderOsd();
 
       if (isMpv()) {
@@ -5584,16 +5349,12 @@
         return;
       }
 
-      const dur = compat.on
-        ? (compat.duration || 0)
-        : (isFinite(pvVideo.duration) ? pvVideo.duration : 0);
-      const pos = compat.on ? compatPosition() : pvVideo.currentTime;
+      const dur = isFinite(pvVideo.duration) ? pvVideo.duration : 0;
+      const pos = pvVideo.currentTime;
 
 
       if (!isSeekDragging() && !seeking) {
-        const durLabel = compat.on
-          ? (dur > 0 ? fmtTime(dur) : '--:--')
-          : (!isFinite(dur) ? (dur === Infinity ? '直播' : '--:--') : fmtTime(dur));
+        const durLabel = (!isFinite(dur) ? (dur === Infinity ? '直播' : '--:--') : fmtTime(dur));
         document.getElementById('ctrlTime').textContent = `${fmtTime(pos)} / ${durLabel}`;
         paintSlider('seekFill', 'seekThumb', dur > 0 ? pos / dur : 0);
       }
@@ -5602,7 +5363,7 @@
       try {
         if (dur > 0 && pvVideo.buffered && pvVideo.buffered.length) {
           const end = pvVideo.buffered.end(pvVideo.buffered.length - 1);
-          const absEnd = compat.on ? compat.base + end : end;
+          const absEnd = end;
           document.getElementById('seekBuffer').style.width =
             Math.min(100, (absEnd / dur) * 100) + '%';
         }
@@ -5686,9 +5447,8 @@
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
 
       const v = document.getElementById('h5Player');
-      // 当前播放位置 / 时长（兼容 mpv 与转封装模式）
-      const curPos = () => isMpv() ? (mpvState.position || 0)
-        : (compat.on ? compatPosition() : (isFinite(v.currentTime) ? v.currentTime : 0));
+      // 当前播放位置 / 时长
+      const curPos = () => mpvState.position || 0;
       const curDur = () => isMpv() ? (mpvState.duration || 0) : seekDuration();
 
       switch (e.code) {

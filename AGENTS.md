@@ -42,10 +42,11 @@ KimBoxPC-桌面版.bat
          └─ window.kimbox（electron/preload.js 暴露的唯一 IPC 通道）
 ```
 
-- **前端没有任何打包步骤**：`public/index.html` 是手写单文件，CSS 与 JS 都内联在 `<script>` 里，配 `public/vendor/hls.min.js`、`public/vendor/mpegts.js`。改完刷新窗口即可，不需要 build。
+- **前端没有任何打包步骤**：`public/index.html` 是手写单文件，CSS 与 JS 都内联在 `<script>` 里，（`public/vendor/` 下的 hls/mpegts 已随兼容内核移除）。改完刷新窗口即可，不需要 build。
 - **播放链路**：libmpv（`MPV_RENDER_API_TYPE_SW`）→ 内存帧 → IPC `mpv:frame` → `<canvas>`；音频由 mpv 直连声卡，**不经过浏览器 MSE**。约 30fps（33ms 间隔）推帧。
 - **虫包（JVM 站源）**：`type:3` 站点（`api` 以 `csp_` 开头）由 `jvmBridge.js` 拉起 `jvm/companion-service.jar`（xiugou-tv 的 android-bridge 产物）在 `127.0.0.1:<随机端口>` 提供 `/spider/{load,call,reset}`，`spiderEngine.js` 把它翻译成我们的站点模型。启动参数必须带 `-noverify`（dex2jar 产物缺 stackmap，会 VerifyError 降级成 SpiderNull）、`-Dfile.encoding=UTF-8`、`--stdin-watch=on`、`--parent-pid=<pid>`，缓存目录用 `-Duser.home=data/jvm/home` 重定向。运行时不入 git（`jvm/`、`runtime/`），用 `tools\fetch-jvm.ps1` 拷入。
-- **三内核**：默认 `mpv`；`网页 (MSE)`（`mse`）作为可选（更顺滑/更省 CPU）；`ffmpeg (兼容)` 走 `/api/remux`（`ffmpeg -c copy` 转 MPEG-TS 直出给 hls/mpegts.js），用于规避 HLS `DISCONTINUITY` 时间戳重置导致的音频变调；`网页 (MSE)` 强制 hls.js + 浏览器原生解码（大缓冲、Worker），画面最顺但无法矫正脏源音频，依赖本地代理同源。引擎值存 `tvbox_engine`（`mpv` / `mse` / `browser`）。
+- **单内核**：只用 `mpv`（libmpv 原生渲染）。此前的 `网页 (MSE)` 与 `ffmpeg (兼容)` 两个内核因浏览器解码的声音异常已移除（3.14.86 / 3.14.89）；`engineMode()` 恒为 `mpv`，旧值 `tvbox_engine=browser|mse` 会自动迁回 mpv。
+- **兼容内核已移除**：`/api/remux`（ffmpeg 转封装）、`public/vendor/hls.min.js`、`public/vendor/mpegts.js` 已删除（3.14.92 / 3.14.93）；`/api/hls`、`/api/seg`、`/api/probe` 仍被 mpv 链路使用，**不要**删除。
 - **播放列表代理**（`/api/hls`）：开启广告拦截时，前端不再把 CDN 地址直接交给播放器，而是让本地服务拉一次 m3u8、把分片与 `URI="..."` 改写成绝对地址后缓存，再用 `/api/hls/<token>.m3u8` 喂给播放器 —— 这样「分析用的列表」和「播放用的列表」是同一份字节。原因：部分 CDN 每次请求插播的广告位置都不同（实测同一地址连拉 4 次得到 4 组时长序列），先分析后播放会错位。代理失败才退回直连 + `/api/ads`。
 - **运行状态是模块级单例**：`server.js` 顶部的 `state`（configId / url / sites / activeSite / sitesVersion）。单进程单用户假设贯穿全局，不要引入需要多实例并发的写法。
 
@@ -113,13 +114,12 @@ Invoke-RestMethod http://127.0.0.1:3988/api/version     # version / changelogVer
 Invoke-RestMethod http://127.0.0.1:3988/api/configs
 Invoke-RestMethod http://127.0.0.1:3988/api/sites
 Invoke-RestMethod http://127.0.0.1:3988/api/backups
-Invoke-RestMethod http://127.0.0.1:3988/api/remux/status
 
 # 2) 完整桌面链路
 npm run app    # 首页加载 → 搜索 → 详情 → mpv 播放/拖动 → 切集 → 广告跳过 → 摸鱼键 → 退出无残留
 ```
 
-- 播放相关改动：必须用真实片源试 **mpv 内核** 与 **ffmpeg 兼容内核**，并覆盖「拖动进度」「切线路」「播完自动下一集」「中途广告插播不误判为结束」。
+- 播放相关改动：必须用真实片源试 **mpv 内核**，并覆盖「拖动进度」「切线路」「播完自动下一集」「中途广告插播不误判为结束」。
 - 广告/跳转排障：按 **D**（或顶栏「🐞 调试」）打开广告调试面板 —— 列出每段广告的起止、跳转目标、全部分块的 `时长/分片数`（★=判定为广告），底部实时显示当前位置与命中状态；调试开启时每次跳过都会写进 `data/app.log`（`src=ad`）。
 - 排查闪退看 `data/app.log`；服务端日志在控制台，渲染进程日志经 `POST /api/log` 落到同一个文件。
 - UI 改动在 Electron 窗口里确认（`window.kimbox` 存在），同时确认浏览器直连 `npm start` 时降级路径不报错。
