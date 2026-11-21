@@ -1628,6 +1628,54 @@ app.get('/api/version', (req, res) => {
 // 虫包常给 http://127.0.0.1:<port>/... 这类没有后缀的地址：
 // mpv/hls.js 只按后缀选解复用器，会把 HLS 当普通文件而播不了。
 // 这里读回前几 KB 判断真实类型（只读一小段就断开，不会把整个直播流拉下来）。
+/* ==================== 图片代理（豆瓣防盗链 418） ==================== */
+// 豆瓣图床会校验 Referer，前端 <img> 直连会被 418；这里带上 Referer 拉一次并缓存。
+const IMG_CACHE = new Map();
+const IMG_CACHE_MAX = 120;
+const IMG_TTL = 3600 * 1000;
+const IMG_HOSTS = /(^|\.)(doubanio\.com|douban\.com)$/i;
+
+app.get('/api/img', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: '需要 http(s) 绝对地址' });
+  let host = '';
+  try { host = new URL(url).hostname; } catch (e) { return res.status(400).json({ error: '地址无效' }); }
+  // 只代理已知图床：避免把本服务变成任意 URL 的开放代理（SSRF）
+  if (!IMG_HOSTS.test(host)) return res.status(403).json({ error: '仅代理豆瓣图片' });
+
+  const hit = IMG_CACHE.get(url);
+  if (hit && Date.now() - hit.at < IMG_TTL) {
+    res.setHeader('Content-Type', hit.type);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.end(hit.buf);
+  }
+  // 豆瓣对 Referer 敏感：换几个来源各试一次（个别图片只认 www.douban.com）
+  const referers = ['https://movie.douban.com/', 'https://www.douban.com/'];
+  let lastErr = null;
+  for (const ref of referers) {
+    try {
+      const r = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 12000,
+        maxContentLength: 6 * 1024 * 1024,
+        maxRedirects: 3,
+        headers: { 'User-Agent': DESKTOP_UA, Referer: ref, Accept: 'image/*,*/*' },
+        validateStatus: (s) => s >= 200 && s < 300
+      });
+      const type = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
+      if (!/^image\//i.test(type)) { lastErr = 'not-image:' + type; continue; }
+      const buf = Buffer.from(r.data);
+      if (IMG_CACHE.size >= IMG_CACHE_MAX) IMG_CACHE.delete(IMG_CACHE.keys().next().value);
+      IMG_CACHE.set(url, { buf, type, at: Date.now() });
+      res.setHeader('Content-Type', type);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.end(buf);
+    } catch (e) { lastErr = e.message; }
+  }
+  // 都失败：交给浏览器直连（前端 onerror 会显示占位图），不再返回 502 干扰控制台
+  res.redirect(302, url);
+});
+
 app.get('/api/sniff', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ kind: 'error', error: '缺少 url' });

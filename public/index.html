@@ -2918,6 +2918,12 @@
       } catch (e) { return key || ''; }
     }
 
+    // 豆瓣图床有防盗链（直连会 418），统一走本地 /api/img 代理；其它图床原样返回
+    function imgUrl(u) {
+      if (!u) return '';
+      return /^https?:\/\/([^/]*\.)?douban(io)?\.com\//i.test(u) ? '/api/img?url=' + encodeURIComponent(u) : u;
+    }
+
     function buildCard(v, idx = 0) {
       const siteKey = v.siteKey || activeSiteKey;
       const card = document.createElement('div');
@@ -2937,7 +2943,7 @@
 
       setSafeHTML(card, `
         <div class="poster-wrap">
-          <img src="${escapeHtml(v.vod_pic || fallback)}" data-fallback="${escapeHtml(fallback)}" referrerpolicy="no-referrer" loading="lazy" decoding="async" width="300" height="450" fetchpriority="${idx < 6 ? 'high' : 'low'}">
+          <img src="${escapeHtml(imgUrl(v.vod_pic || fallback))}" data-fallback="${escapeHtml(fallback)}" referrerpolicy="no-referrer" loading="lazy" decoding="async" width="300" height="450" fetchpriority="${idx < 6 ? 'high' : 'low'}">
           ${v.vod_remarks ? `<div class="remarks">${escapeHtml(v.vod_remarks)}</div>` : ''}
           ${progress}
         </div>
