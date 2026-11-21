@@ -1512,8 +1512,8 @@
 
         <div id="compatOptions">
           <label class="audio-auto">
-            <input type="checkbox" id="compatChk" onchange="toggleCompat(this.checked)">
-            兼容模式：仅在脏流时转封装（默认开启；干净流直连，拖动秒级）
+            <input type="checkbox" id="compatChk" checked disabled title="该内核始终转封装">
+            兼容模式：本内核始终用 ffmpeg 转封装（拖动约 10 秒，但声音最稳）
           </label>
         </div>
 
@@ -4984,11 +4984,11 @@
 
       // 引擎模式：
       //   mpv     → 上面已返回，走原生解码
-      //   browser → ffmpeg 兼容内核：脏流（有时间戳重置）才转封装，干净流走 hls.js
+      //   browser → ffmpeg 兼容内核：一律走 ffmpeg 转封装（浏览器解码会声音异常）
 
-      // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
+      // 兼容内核（browser）：干净流、脏流都交给 ffmpeg 转封装，
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
-      if (compatEnabled() && /\.m3u8/i.test(playUrl)) {
+      if (/\.m3u8/i.test(finalUrl) || /\.m3u8/i.test(playUrl)) {
         // 用普通探测判断「是否有时间戳重置」即可（不需要过滤后的统计了）
         let info = await probeQuick(finalUrl, 8000, false);
         if (!info || info.disc === undefined) {
@@ -4998,16 +4998,15 @@
         // 而 probeQuick 探测的是另一份原始 CDN 列表，两者会差几十秒（进度条会错）。
         if (currentPlaylistDuration > 0) compat.duration = currentPlaylistDuration;
         else if (info && info.duration) compat.duration = info.duration;
-        if (info && info.disc > 0) {
-          playCompat(playUrl, resumeAt || 0);
-          probeAndWarn(finalUrl, true);
-          // 转封装的拖动要重启 ffmpeg（实测 10~16 秒），提示可换更快的内核
-          if (!window.__dirtyHintShown) {
-            window.__dirtyHintShown = true;
-            showToast('该源存在时间戳重置，已自动转封装以保证声音正常；拖动较慢，追求流畅可在面板切「mpv 内核」', 6000);
-          }
-          return;
+        // 兼容内核：一律转封装。浏览器解码（hls.js）在部分源上会声音异常，
+        // 干净流也走 ffmpeg，才能保证「兼容」名副其实。
+        playCompat(playUrl, resumeAt || 0);
+        probeAndWarn(finalUrl, true);
+        if (!window.__dirtyHintShown && info && info.disc > 0) {
+          window.__dirtyHintShown = true;
+          showToast('该源存在时间戳重置，已自动转封装以保证声音正常；拖动较慢，追求流畅可在面板切「mpv 内核」', 6000);
         }
+        return;
       }
       destroyCompat();
       probeAndWarn(finalUrl, false);
