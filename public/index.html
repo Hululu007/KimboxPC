@@ -285,6 +285,9 @@
       border: 1px solid var(--border);
       display: flex;
       flex-direction: column;
+      /* 长列表性能：屏幕外的卡片跳过布局/绘制；占位尺寸避免滚动条跳动 */
+      content-visibility: auto;
+      contain-intrinsic-size: auto 440px;
     }
     .card:hover {
       transform: translateY(-4px);
@@ -1145,7 +1148,25 @@
       cursor: pointer;
     }
     .boss-web-overlay.show { display: flex; }
-  </style>
+  
+    /* 键盘用户：只在键盘导航时显示焦点环（鼠标点击不出现） */
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .card:focus-visible, .filter-chip:focus-visible, .ep-btn:focus-visible { outline-offset: -1px; }
+
+    /* 尊重「减少动态效果」系统设置 */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+</style>
 </head>
 <body>
 
@@ -1223,7 +1244,7 @@
   </div>
 
   <!-- 配置源管理面板 -->
-  <div class="cfg-mask" id="cfgMask" onclick="if(event.target===this) closeConfigManager()">
+  <div class="cfg-mask" id="cfgMask" role="dialog" aria-modal="true" aria-label="管理配置源" onclick="if(event.target===this) closeConfigManager()">
     <div class="cfg-panel">
       <div class="cfg-title">
         <span>配置源管理</span>
@@ -2507,7 +2528,7 @@
       setSafeHTML(bar, groups.map(g => {
         const cur = sel[g.key] || '';
         const chip = (label, val, active) =>
-          `<span class="filter-chip${active ? ' active' : ''}" data-tid="${escapeHtml(String(tid))}" data-key="${escapeHtml(String(g.key))}" data-val="${escapeHtml(String(val))}">${escapeHtml(label)}</span>`;
+          `<span class="filter-chip${active ? ' active' : ''}" role="button" tabindex="0" data-tid="${escapeHtml(String(tid))}" data-key="${escapeHtml(String(g.key))}" data-val="${escapeHtml(String(val))}">${escapeHtml(label)}</span>`;
         const chips = [chip('全部', '', cur === '')]
           .concat((g.value || []).map(v => chip(v.n || v.v, v.v, cur === String(v.v))));
         return `<div class="filter-row"><span class="filter-name">${escapeHtml(g.name)}</span>${chips.join('')}</div>`;
@@ -2793,10 +2814,14 @@
       } catch (e) { return key || ''; }
     }
 
-    function buildCard(v) {
+    function buildCard(v, idx = 0) {
       const siteKey = v.siteKey || activeSiteKey;
       const card = document.createElement('div');
       card.className = 'card';
+      // 可聚焦 + 可读名称：卡片是 div，键盘用户也要能选中并回车打开
+      card.setAttribute('role', 'button');
+      card.tabIndex = 0;
+      card.setAttribute('aria-label', (v.vod_name || '影片') + (v.vod_remarks ? '，' + v.vod_remarks : ''));
       card.onclick = () => openDetail(v.vod_id, siteKey, null, null, v.vod_name || '');
 
       const fallback = 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'140\'><rect width=\'100%\' height=\'100%\' fill=\'%23222\'/></svg>';
@@ -2808,7 +2833,7 @@
 
       setSafeHTML(card, `
         <div class="poster-wrap">
-          <img src="${escapeHtml(v.vod_pic || fallback)}" data-fallback="${escapeHtml(fallback)}" referrerpolicy="no-referrer" loading="lazy">
+          <img src="${escapeHtml(v.vod_pic || fallback)}" data-fallback="${escapeHtml(fallback)}" referrerpolicy="no-referrer" loading="lazy" decoding="async" width="300" height="450" fetchpriority="${idx < 6 ? 'high' : 'low'}">
           ${v.vod_remarks ? `<div class="remarks">${escapeHtml(v.vod_remarks)}</div>` : ''}
           ${progress}
         </div>
@@ -3572,7 +3597,7 @@
       msg.style.display = 'none';
       grid.style.display = 'grid';
       grid.replaceChildren();
-      list.forEach(v => grid.appendChild(buildCard(v)));
+      list.forEach((v, i) => grid.appendChild(buildCard(v, i)));
       setFooter(`${label} · 共 ${list.length} 部`);
       updateToolbar();
     }
@@ -3592,7 +3617,7 @@
       grid.style.display = 'grid';
       if (!append) grid.replaceChildren();
 
-      list.forEach(v => grid.appendChild(buildCard(v)));
+      list.forEach((v, i) => grid.appendChild(buildCard(v, i)));
     }
 
     async function openDetail(id, siteKey, targetEpIdx = null, targetPos = null, vodName = '') {
@@ -3719,6 +3744,23 @@
         return;
       }
     }, true);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const cfg = document.getElementById('cfgMask');
+        if (cfg && cfg.classList.contains('show')) { closeConfigManager(); return; }
+        const ask = document.getElementById('askMask');
+        if (ask && ask.classList.contains('show') && typeof closeAsk === 'function') { closeAsk(); return; }
+      }
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const el = e.target;
+      if (!el || !el.matches) return;
+      // 卡片与筛选 chip 是 div/span，补上键盘激活
+      if (el.matches('.card[role="button"], .filter-chip[role="button"]')) {
+        e.preventDefault();
+        el.click();
+      }
+    });
+
     document.addEventListener('error', (e) => {
       const img = e.target;
       if (!img || img.tagName !== 'IMG' || !img.dataset) return;
@@ -5060,6 +5102,11 @@
       fwd30: '<svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor"><path d="M12 5V2l4.5 4L12 10V7a5 5 0 1 0 5 5h2a7 7 0 1 1-7-7z"/><text x="12" y="16.6" font-size="7.2" font-family="Arial,Helvetica,sans-serif" font-weight="700" text-anchor="middle">30</text></svg>'
     };
 
+    // 纯图标按钮：把 title 同步为 aria-label，读屏才有可读名称（ICON 定义之后执行一次即可）
+    document.querySelectorAll('button.ctrl-btn').forEach((b) => {
+      if (b.title && !b.getAttribute('aria-label')) b.setAttribute('aria-label', b.title);
+    });
+
     function fmtTime(t) {
       if (!isFinite(t) || t < 0) return '0:00';
       t = Math.floor(t);
@@ -5840,7 +5887,7 @@
     }
   </script>
   <!-- 通用输入弹窗（Electron 不支持 prompt()，统一用它） -->
-  <div class="ask-mask" id="askMask">
+  <div class="ask-mask" id="askMask" role="dialog" aria-modal="true" aria-label="输入">
     <div class="ask-panel">
       <div class="ask-title" id="askTitle">请输入</div>
       <div class="ask-hint" id="askHint"></div>
