@@ -1519,7 +1519,7 @@
       try {
         const data = await (await fetch('/api/players')).json();
         const sel = document.getElementById('playerSel');
-        sel.innerHTML = '';
+        sel.replaceChildren();
         if (!data.players || data.players.length === 0) {
           const opt = document.createElement('option');
           opt.value = '';
@@ -1548,7 +1548,7 @@
       const resp = await fetch('/api/configs');
       const data = await resp.json();
       const sel = document.getElementById('configSelect');
-      sel.innerHTML = '';
+      sel.replaceChildren();
       if (!data.configs || data.configs.length === 0) {
         const opt = document.createElement('option');
         opt.value = '';
@@ -1689,14 +1689,14 @@
         if (!p.ok) return 2;
         return 0;
       };
-      const sorted = [...sites].sort((a, b) => {
+      const sorted = sites.toSorted((a, b) => {
         const ra = rank(a), rb = rank(b);
         if (ra !== rb) return ra - rb;
         const pa = ping[a.key] || {}, pb = ping[b.key] || {};
         return (pa.ms || 99999) - (pb.ms || 99999);
       });
 
-      select.innerHTML = '';
+      select.replaceChildren();
       sorted.forEach(s => {
         const opt = document.createElement('option');
         opt.value = s.key;
@@ -2115,7 +2115,7 @@
           return;
         }
 
-        box.innerHTML = '';
+        box.replaceChildren();
         d.list.forEach(b => {
           const row = document.createElement('div');
           row.className = 'cfg-row';
@@ -2157,7 +2157,7 @@
         });
       } catch (e) {
         sum.textContent = '读取失败: ' + e.message;
-        box.innerHTML = '';
+        box.replaceChildren();
       }
     }
 
@@ -2216,7 +2216,7 @@
     async function renderConfigManager() {
       const box = document.getElementById('cfgList');
       const data = await (await fetch('/api/configs')).json();
-      box.innerHTML = '';
+      box.replaceChildren();
 
       if (!data.configs || data.configs.length === 0) {
         box.innerHTML = '<div class="cfg-sub" style="padding:16px 0">还没有配置源，点右上角「＋ 添加」。</div>';
@@ -2343,7 +2343,7 @@
             document.getElementById('siteSelect').innerHTML = '<option value="">(未加载站点)</option>';
             document.getElementById('categoryTabs').innerHTML =
               '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
-            document.getElementById('videoGrid').innerHTML = '';
+            document.getElementById('videoGrid').replaceChildren();
             document.getElementById('videoGrid').style.display = 'none';
             setFooter('');
             showStatus('配置源已全部删除。点击顶部「＋ 添加」重新添加。');
@@ -2410,7 +2410,7 @@
         document.getElementById('configSelect').innerHTML = '<option value="">(还没有配置源)</option>';
         document.getElementById('categoryTabs').innerHTML =
           '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
-        document.getElementById('videoGrid').innerHTML = '';
+        document.getElementById('videoGrid').replaceChildren();
         document.getElementById('videoGrid').style.display = 'none';
         setFooter('');
         showStatus('已初始化完成。点击顶部「＋ 添加」重新添加配置源即可开始。');
@@ -2466,7 +2466,7 @@
       const bar = document.getElementById('filterBar');
       if (!bar) return;
       const groups = (spiderFilters && spiderFilters[String(tid)]) || [];
-      if (!groups.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+      if (!groups.length) { bar.style.display = 'none'; bar.replaceChildren(); return; }
       const sel = spiderFilterSel[String(tid)] || {};
       bar.innerHTML = groups.map(g => {
         const cur = sel[g.key] || '';
@@ -2542,7 +2542,7 @@
 
     function renderCategories(classes) {
       const bar = document.getElementById('categoryTabs');
-      bar.innerHTML = '';
+      bar.replaceChildren();
 
       const mk = (text, handler) => {
         const item = document.createElement('div');
@@ -2842,10 +2842,8 @@
       if (!url) return null;
       if (probeMemo.has(url)) return probeMemo.get(url);
       try {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}${headersQuery()}`, { signal: ctrl.signal });
-        clearTimeout(timer);
+        // AbortSignal.timeout() 自带超时，不用再维护控制器与定时器
+        const r = await fetch(`/api/probe?url=${encodeURIComponent(url)}${headersQuery()}`, { signal: AbortSignal.timeout(timeoutMs) });
         const d = await r.json();
         if (d && d.duration && !currentPlaylistDuration) compat.duration = d.duration;
         probeMemo.set(url, d);
@@ -3379,7 +3377,7 @@
         const data = await resp.json();
         if (mySeq !== allSourcesSeq || !currentDetail || currentDetail.vod_name !== name) return;
         const list = data.list || [];
-        box.innerHTML = '';
+        box.replaceChildren();
 
         if (!list.length) {
           box.innerHTML = '<span class="src-loading">其它站点暂未找到同名影片</span>';
@@ -3511,7 +3509,7 @@
       try {
         await fetch(url, { method: 'DELETE' });
         const grid = document.getElementById('videoGrid');
-        grid.innerHTML = '';
+        grid.replaceChildren();
         grid.style.display = 'none';
         const msg = document.getElementById('statusMsg');
         msg.style.display = 'block';
@@ -3537,7 +3535,7 @@
       }
       msg.style.display = 'none';
       grid.style.display = 'grid';
-      grid.innerHTML = '';
+      grid.replaceChildren();
       list.forEach(v => grid.appendChild(buildCard(v)));
       setFooter(`${label} · 共 ${list.length} 部`);
       updateToolbar();
@@ -3556,7 +3554,7 @@
 
       msg.style.display = 'none';
       grid.style.display = 'grid';
-      if (!append) grid.innerHTML = '';
+      if (!append) grid.replaceChildren();
 
       list.forEach(v => grid.appendChild(buildCard(v)));
     }
@@ -3577,8 +3575,8 @@
       document.getElementById('mTitle').textContent = '加载中...';
       document.getElementById('mMeta').textContent = '';
       document.getElementById('mDesc').textContent = '';
-      document.getElementById('mSourceTabs').innerHTML = '';
-      document.getElementById('mEpisodes').innerHTML = '';
+      document.getElementById('mSourceTabs').replaceChildren();
+      document.getElementById('mEpisodes').replaceChildren();
       document.getElementById('pvPanelLabel').textContent = '选集';
       setPanelCollapsed(true);
       pendingEpIdx = (targetEpIdx === null || targetEpIdx === undefined) ? null : targetEpIdx;
@@ -3721,7 +3719,7 @@
 
     function renderSources() {
       const container = document.getElementById('mSourceTabs');
-      container.innerHTML = '';
+      container.replaceChildren();
       if (!currentDetail.playSources || currentDetail.playSources.length === 0) {
         container.innerHTML = '<span style="color:#777">未发现有效播放线路</span>';
         return;
@@ -3761,7 +3759,7 @@
 
     function renderEpisodes(isManualSwitch = false, targetPos = null) {
       const container = document.getElementById('mEpisodes');
-      container.innerHTML = '';
+      container.replaceChildren();
       const source = currentDetail.playSources[currentSourceIdx];
       if (!source || !source.episodes) return;
 
