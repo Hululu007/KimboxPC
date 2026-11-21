@@ -62,7 +62,7 @@ KimBoxPC 采用完全**绿色便携式**架构打包，**目标电脑不需要�
 | **libmpv 原生动态库** | ✅ 必需 | `native\lib\libmpv-2.dll` + `native\build\Release\mpv_native.node` |
 | **JVM 解析层（虫包站源）** | ⚪ 可选 | 随包 `runtime\jre`（JRE 21）与 `jvm\`（companion-service.jar + 依赖）；只有配置里带 `type:3` 虫包站点时才会启动 |
 | **VC++ 2015-2022 运行库** | ✅ 必需 | 缺失时运行随包的 `tools\VC_redist.x64.exe` 或 `修复运行环境.bat` |
-| **随附 ffmpeg 组件** | ⚪ 备用 | `ffmpeg\ffmpeg.exe`，调试/转封装工具，播放已不再依赖它 |
+| **ffmpeg 组件** | ⚪ 不随包 | `ffmpeg\ffmpeg.exe` 仅开发调试用（抓流/转封装），**安装包与便携包已不再包含**，播放只走 mpv |
 | **Node.js (系统环境)** | ❌ 不需要 | 桌面版开箱即用，无需配置系统环境变量 |
 
 ### 2. 安装版（推荐）

@@ -38,7 +38,7 @@ Write-Host "[打包] 安装版 v$ver" -ForegroundColor Cyan
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 
-$xd = @('.git', 'data', 'node_modules\.cache', 'native\build\Release\obj', 'dist') | ForEach-Object { Join-Path $root $_ }
+$xd = @('.git', 'data', 'ffmpeg', 'node_modules\.cache', 'native\build\Release\obj', 'dist') | ForEach-Object { Join-Path $root $_ }
 $xf = @('*.lnk', '_e.log', '_e.err', '*.pdb', '*.iobj', '*.ipdb', '*.lib', '*.exp', '*.vcxproj', '*.vcxproj.filters', '*.sln', '_*.js', '_*.log', '_*.json')
 $rcArgs = @($root, $appDir, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/nc', '/ns', '/np', '/XD') + $xd + @('/XF') + $xf
 & robocopy @rcArgs | Out-Null

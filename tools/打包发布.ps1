@@ -27,7 +27,7 @@ Write-Host "[打包] 版本 $ver" -ForegroundColor Cyan
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
 
-$xd = @('.git', 'data', 'node_modules\.cache', 'native\build\Release\obj') | ForEach-Object { Join-Path $root $_ }
+$xd = @('.git', 'data', 'ffmpeg', 'node_modules\.cache', 'native\build\Release\obj') | ForEach-Object { Join-Path $root $_ }
 $xf = @('*.lnk', '_e.log', '_e.err', '*.pdb', '*.iobj', '*.ipdb', '*.lib', '*.exp', '*.vcxproj', '*.vcxproj.filters', '*.sln')
 
 $rcArgs = @($root, $pkgDir, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/nc', '/ns', '/np', '/XD') + $xd + @('/XF') + $xf
