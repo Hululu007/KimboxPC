@@ -1283,6 +1283,8 @@
         版本更新：<span id="mUpdText">正在读取…</span>
         <button class="ghost-btn" style="margin-left:10px" id="mUpdBtn" onclick="updateAction()">检查更新</button>
         <button class="ghost-btn" style="margin-left:6px" id="mUpdSkip" onclick="skipUpdateVersion()" title="不再自动提示这个版本（仍可在这里手动更新）">忽略此版本</button>
+        <button class="ghost-btn" style="margin-left:6px" id="mUpdClean" onclick="cleanUpdateCache()" title="删除 data\updates 里的旧安装包（每个约 300MB）">清理更新缓存</button>
+        <span id="mUpdCache" style="color:var(--text-muted);font-size:12px;margin-left:6px"></span>
         <span id="mUpdProgress" style="color:var(--text-muted);font-size:12px;margin-left:8px"></span>
       </div>
 
@@ -1854,6 +1856,26 @@
       } catch (e) { return null; }
     }
 
+    // 更新缓存占用（data\updates 里的安装包）
+    async function refreshUpdateCache() {
+      const el = document.getElementById('mUpdCache');
+      if (!el) return;
+      try {
+        const c = await (await fetch('/api/update/cache')).json();
+        const mb = Math.round((c.totalBytes || 0) / 1048576);
+        el.textContent = c.files && c.files.length ? '｜缓存 ' + mb + ' MB（' + c.files.length + ' 个包）' : '｜缓存 0 MB';
+      } catch (e) { el.textContent = ''; }
+    }
+
+    async function cleanUpdateCache() {
+      try {
+        const r = await (await fetch('/api/update/cache/clean', { method: 'POST' })).json();
+        if (r.error) throw new Error(r.error);
+        showToast('已清理 ' + r.removed + ' 个安装包，释放 ' + Math.round(r.bytes / 1048576) + ' MB', 4000);
+      } catch (e) { showToast('清理失败：' + e.message, 5000); }
+      refreshUpdateCache();
+    }
+
     // 顶栏「管理」按钮上的新版本红点
     function markUpdateBadge(on) {
       const b = document.getElementById('btnManager');
@@ -2302,6 +2324,7 @@
       refreshUpdateStatus();
       await renderConfigManager();
       document.getElementById('cfgMask').classList.add('show');
+      refreshUpdateCache();   // 面板显示后再刷新占用（避免渲染前取不到节点）
     }
 
     function closeConfigManager() {

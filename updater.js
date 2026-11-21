@@ -48,7 +48,7 @@ function log(msg) {
 function saveState() {
   try {
     fs.mkdirSync(UPDATE_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify({ lastCheck: st.lastCheck, latest: st.latest }, null, 2));
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ lastCheck: st.lastCheck, latest: st.latest, applied: st.applied || null }, null, 2));
   } catch (e) {}
 }
 function loadState() {
@@ -56,6 +56,7 @@ function loadState() {
     const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     if (s.lastCheck) st.lastCheck = s.lastCheck;
     if (s.latest) st.latest = s.latest;
+    if (s.applied) st.applied = s.applied;
   } catch (e) {}
 }
 
@@ -149,6 +150,70 @@ function status() {
   };
 }
 
+/** 列出 updates 目录里的安装包（*.exe / *.zip / *.part） */
+function listPackages() {
+  const out = [];
+  try {
+    for (const name of fs.readdirSync(UPDATE_DIR)) {
+      if (!/\.(exe|zip|part)$/i.test(name)) continue;
+      try {
+        const s = fs.statSync(path.join(UPDATE_DIR, name));
+        out.push({ name, size: s.size, at: s.mtimeMs });
+      } catch (e) {}
+    }
+  } catch (e) {}
+  return out;
+}
+
+/** 删除旧安装包：keepName 指定的那一个保留（正在下载/刚下好的） */
+function cleanOldPackages(keepName) {
+  let removed = 0;
+  for (const p of listPackages()) {
+    if (keepName && p.name === keepName) continue;
+    if (keepName && p.name === keepName + '.part') continue;
+    if (/\.part$/i.test(p.name)) continue;   // 半截文件交给下载逻辑管
+    try { fs.unlinkSync(path.join(UPDATE_DIR, p.name)); removed++; } catch (e) {}
+  }
+  return removed;
+}
+
+/** 更新缓存信息（给管理面板显示占用） */
+function cacheInfo() {
+  const files = listPackages();
+  return { dir: UPDATE_DIR, files, totalBytes: files.reduce((a, b) => a + b.size, 0) };
+}
+
+/** 清理全部安装包（除正在下载的半截文件外） */
+function cleanCache() {
+  let removed = 0, bytes = 0;
+  for (const p of listPackages()) {
+    if (/\.part$/i.test(p.name)) continue;
+    try { fs.unlinkSync(path.join(UPDATE_DIR, p.name)); removed++; bytes += p.size; } catch (e) {}
+  }
+  st.downloaded = null;
+  log('已清理更新缓存：删除 ' + removed + ' 个文件，释放 ' + Math.round(bytes / 1048576) + ' MB');
+  return { removed, bytes };
+}
+
+/** 启动时清理：上次已经用来安装的那个包，装完就没用了 */
+function cleanupOnStart() {
+  loadState();
+  if (st.applied && st.applied.name) {
+    try {
+      const f = path.join(UPDATE_DIR, st.applied.name);
+      if (fs.existsSync(f)) { fs.unlinkSync(f); log('已清理上次使用的安装包: ' + st.applied.name); }
+    } catch (e) {}
+    st.applied = null;
+    saveState();
+  }
+  // 顺手清掉半截下载文件
+  try {
+    for (const name of fs.readdirSync(UPDATE_DIR)) {
+      if (/\.part$/i.test(name)) { try { fs.unlinkSync(path.join(UPDATE_DIR, name)); } catch (e) {} }
+    }
+  } catch (e) {}
+}
+
 function assetPath(asset) {
   fs.mkdirSync(UPDATE_DIR, { recursive: true });
   return path.join(UPDATE_DIR, asset.name);
@@ -169,6 +234,9 @@ async function download(force) {
   st.downloading = true;
   st.progress = 0;
   st.error = '';
+  // 只保留本次要下的包，旧的先删掉（每个约 300MB，不清会越积越多）
+  const removed = cleanOldPackages(asset.name);
+  if (removed) log(`下载前清理了 ${removed} 个旧安装包`);
   log(`开始下载 ${asset.name}（${asset.size} 字节）`);
   try {
     const r = await axios.get(asset.url, {
@@ -257,6 +325,8 @@ function apply() {
   if (mode === 'installer') {
     if (!/\.exe$/i.test(dl.path)) throw new Error('安装版需要 Setup.exe 更新包');
     applyInstaller(dl.path);
+    st.applied = { name: dl.name, at: Date.now() };
+    saveState();
     return { ok: true, action: 'installer', file: dl.path };
   }
   if (!/\.zip$/i.test(dl.path)) throw new Error('便携版需要 zip 更新包');
@@ -280,4 +350,4 @@ function schedulePeriodicCheck(intervalMs = CHECK_INTERVAL_IDLE) {
   return timer;
 }
 
-module.exports = { check, status, download, apply, scheduleAutoCheck, schedulePeriodicCheck, installMode, cmpVersion, sha256File };
+module.exports = { check, status, download, apply, scheduleAutoCheck, schedulePeriodicCheck, installMode, cmpVersion, sha256File, cacheInfo, cleanCache, cleanupOnStart, cleanOldPackages, listPackages };

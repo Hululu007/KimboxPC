@@ -1794,6 +1794,14 @@ app.post('/api/update/download', async (req, res) => {
   try { res.json(await Updater.download(String(req.query.force || '') === '1')); } catch (e) { res.status(409).json({ error: e.message }); }
 });
 
+app.get('/api/update/cache', (req, res) => {
+  try { res.json(Updater.cacheInfo()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/update/cache/clean', (req, res) => {
+  try { res.json(Updater.cleanCache()); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/update/apply', (req, res) => {
   try {
     const r = Updater.apply();
@@ -1990,6 +1998,7 @@ app.post('/api/play/external', async (req, res) => {
 
 const server = app.listen(PORT, HOST);
 // 启动 20 秒后后台查一次更新（不阻塞启动，失败静默）
+Updater.cleanupOnStart();   // 上次安装用过的包，装完就没用了
 Updater.scheduleAutoCheck(8000);
 // 运行期每 30 分钟复查一次（有缓存规则兜底，不会频繁打 GitHub）
 Updater.schedulePeriodicCheck(30 * 60 * 1000);
