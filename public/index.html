@@ -2,6 +2,41 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <!-- Trusted Types 强制：所有 DOM XSS 汇聚点（innerHTML/outerHTML/insertAdjacentHTML/Worker 等）只接受经策略校验的值。
+       策略在下面的内联脚本里创建（必须早于任何其它脚本，且是 head 的最早标签之一才会生效）。 -->
+  <meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types kimbox-html default;">
+  <script>
+    /* Trusted Types 策略：本站自己的模板走 kimbox-html；第三方库/漏改的写入落到 default（同样校验）。
+       这里的校验不重排 HTML（否则会把我们依赖的 class/style/onclick 剥掉），而是拦截脚本注入面：
+       <script>/<iframe>/<object>/<embed>/<meta>/<link>/<base>、javascript: 与 vbscript: 协议、srcdoc。 */
+    (function () {
+      if (!window.trustedTypes) return;   // 非 Chromium 环境（理论上不会走到）直接跳过
+      var BLOCK = /<\s*(script|iframe|object|embed|meta|link|base)\b|(?:java|vb)script\s*:|srcdoc\s*=/i;
+      function checkHTML(value) {
+        var s = String(value == null ? '' : value);
+        if (BLOCK.test(s)) {
+          // 不静默通过：直接把可疑写入拦下来，并在控制台留痕便于排查（正常渲染不会触发）
+          try { fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: '[tt] blocked HTML write', src: 'tt' }) }).catch(function () {}); } catch (e) {}
+          throw new TypeError('KimBoxPC: 被 Trusted Types 拦截的可疑 HTML');
+        }
+        return s;
+      }
+      function checkScriptURL(value) {
+        var s = String(value == null ? '' : value);
+        // 只放行本地同源、blob:（hls.js 的 Worker）与 https
+        if (/^(blob:|https:\/\/|http:\/\/127\.0\.0\.1|http:\/\/localhost|\/)/i.test(s)) return s;
+        throw new TypeError('KimBoxPC: 被 Trusted Types 拦截的脚本地址');
+      }
+      try { window.__ttHTML = window.trustedTypes.createPolicy('kimbox-html', { createHTML: checkHTML }); } catch (e) {}
+      try {
+        window.trustedTypes.createPolicy('default', {
+          createHTML: checkHTML,
+          createScriptURL: checkScriptURL,
+          createScript: function () { throw new TypeError('KimBoxPC: 禁止动态脚本'); }
+        });
+      } catch (e) {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KimBoxPC 版</title>
   <script src="vendor/hls.min.js"></script>
@@ -2103,7 +2138,7 @@
     async function renderBackupPanel() {
       const box = document.getElementById('bakList');
       const sum = document.getElementById('bakSummary');
-      box.innerHTML = '<div class="cfg-sub">读取中…</div>';
+      setSafeHTML(box, '<div class="cfg-sub">读取中…</div>');
       try {
         const d = await (await fetch('/api/backups')).json();
         sum.textContent =
@@ -2111,7 +2146,7 @@
           `手动备份永不自动删除（当前 ${d.manualCount} 份）。`;
 
         if (!d.list.length) {
-          box.innerHTML = '<div class="cfg-sub" style="padding:14px 0">还没有备份。</div>';
+          setSafeHTML(box, '<div class="cfg-sub" style="padding:14px 0">还没有备份。</div>');
           return;
         }
 
@@ -2219,7 +2254,7 @@
       box.replaceChildren();
 
       if (!data.configs || data.configs.length === 0) {
-        box.innerHTML = '<div class="cfg-sub" style="padding:16px 0">还没有配置源，点右上角「＋ 添加」。</div>';
+        setSafeHTML(box, '<div class="cfg-sub" style="padding:16px 0">还没有配置源，点右上角「＋ 添加」。</div>');
         return;
       }
 
@@ -2340,7 +2375,7 @@
           if (leftover.current && leftover.current.id) {
             bootstrap();
           } else {
-            document.getElementById('siteSelect').innerHTML = '<option value="">(未加载站点)</option>';
+            setSafeHTML(document.getElementById('siteSelect'), '<option value="">(未加载站点)</option>');
             document.getElementById('categoryTabs').innerHTML =
               '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
             document.getElementById('videoGrid').replaceChildren();
@@ -2406,8 +2441,8 @@
 
         activeSiteKey = '';
         currentDetail = null;
-        document.getElementById('siteSelect').innerHTML = '<option value="">(未加载站点)</option>';
-        document.getElementById('configSelect').innerHTML = '<option value="">(还没有配置源)</option>';
+        setSafeHTML(document.getElementById('siteSelect'), '<option value="">(未加载站点)</option>');
+        setSafeHTML(document.getElementById('configSelect'), '<option value="">(还没有配置源)</option>');
         document.getElementById('categoryTabs').innerHTML =
           '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
         document.getElementById('videoGrid').replaceChildren();
@@ -3370,7 +3405,7 @@
       const box = document.getElementById('mAllSources');
       if (!box) return;
       const mySeq = ++allSourcesSeq;
-      box.innerHTML = '<span class="src-loading">正在聚合各站点同片源…（首次约 10 秒）</span>';
+      setSafeHTML(box, '<span class="src-loading">正在聚合各站点同片源…（首次约 10 秒）</span>');
 
       try {
         const resp = await fetch(`/api/sources?name=${encodeURIComponent(name)}`);
@@ -3380,7 +3415,7 @@
         box.replaceChildren();
 
         if (!list.length) {
-          box.innerHTML = '<span class="src-loading">其它站点暂未找到同名影片</span>';
+          setSafeHTML(box, '<span class="src-loading">其它站点暂未找到同名影片</span>');
           return;
         }
 
@@ -3669,6 +3704,21 @@
 
     let lastHistorySave = 0;
 
+    /* ==================== Trusted Types ==================== */
+    // 显式走校验策略写入 HTML（策略在 head 里创建，见 __ttHTML）；返回 undefined 时退化为字符串写入，
+    // 此时仍会经过 default 策略校验，不会被绕过。
+    function setSafeHTML(el, html) {
+      if (!el) return;
+      el.innerHTML = window.__ttHTML ? window.__ttHTML.createHTML(html) : html;
+    }
+
+    // CSP / Trusted Types 违规记录到 app.log，方便以后排查（正常使用不会触发）
+    document.addEventListener('securitypolicyviolation', (e) => {
+      try {
+        fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: '[csp] ' + e.violatedDirective + ' blocked=' + String(e.blockedURI || '').slice(0, 120), src: 'csp' }) }).catch(function () {});
+      } catch (err) {}
+    });
+
     // 当前可保存的播放位置。
     // 浏览器内核（MSE / 兼容）在换集或重置 <video> 的瞬间 currentTime 会回到 0，
     // 此时 duration 也为 0；若照实保存就会把历史进度清零。
@@ -3721,7 +3771,7 @@
       const container = document.getElementById('mSourceTabs');
       container.replaceChildren();
       if (!currentDetail.playSources || currentDetail.playSources.length === 0) {
-        container.innerHTML = '<span style="color:#777">未发现有效播放线路</span>';
+        setSafeHTML(container, '<span style="color:#777">未发现有效播放线路</span>');
         return;
       }
 
