@@ -1991,6 +1991,8 @@ app.post('/api/play/external', async (req, res) => {
 const server = app.listen(PORT, HOST);
 // 启动 20 秒后后台查一次更新（不阻塞启动，失败静默）
 Updater.scheduleAutoCheck(8000);
+// 运行期每 30 分钟复查一次（有缓存规则兜底，不会频繁打 GitHub）
+Updater.schedulePeriodicCheck(30 * 60 * 1000);
 
 server.on('listening', async () => {
   writePid();

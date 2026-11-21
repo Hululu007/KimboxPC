@@ -22,7 +22,8 @@ const API = `https://api.github.com/repos/${REPO}/releases/latest`;
 const UPDATE_DIR = path.join(ROOT, 'data', 'updates');
 const STATE_FILE = path.join(UPDATE_DIR, 'state.json');
 const UA = 'KimBoxPC-Updater';
-const CHECK_INTERVAL = 6 * 60 * 60 * 1000;   // 6 小时内不重复查（GitHub 未认证 60 次/小时）
+const CHECK_INTERVAL = 6 * 60 * 60 * 1000;      // 已发现「比当前新」的版本：6 小时内不重复查（GitHub 未认证 60 次/小时）
+const CHECK_INTERVAL_IDLE = 30 * 60 * 1000;     // 缓存里没有更新的版本：最多压 30 分钟就重查，不然发版后用户永远看不到红点
 
 let pkg = { version: '0.0.0' };
 try { pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); } catch (e) {}
@@ -88,7 +89,12 @@ function pickAsset(assets, mode) {
 
 async function check(force) {
   if (st.checking) return status();
-  if (!force && Date.now() - st.lastCheck < CHECK_INTERVAL && st.latest) return status();
+  // 缓存只有在「确实发现了比当前新的版本」时才值得复用；否则按短周期重查
+  if (!force && st.latest && st.lastCheck) {
+    const cachedNewer = cmpVersion(st.latest.version, pkg.version) > 0;
+    const windowMs = cachedNewer ? CHECK_INTERVAL : CHECK_INTERVAL_IDLE;
+    if (Date.now() - st.lastCheck < windowMs) return status();
+  }
   st.checking = true;
   try {
     const r = await axios.get(API, {
@@ -262,8 +268,16 @@ function apply() {
 /** 启动后延迟检查一次（不阻塞、不弹窗，交给前端决定是否提示） */
 function scheduleAutoCheck(delayMs = 8000) {
   loadState();
-  const t = setTimeout(() => { check(false).catch(() => {}); }, delayMs);
+  // 每次启动都真的查一次（只多一个请求），避免上次缓存的旧版本号把红点压住
+  const t = setTimeout(() => { check(true).catch(() => {}); }, delayMs);
   if (t.unref) t.unref();
 }
 
-module.exports = { check, status, download, apply, scheduleAutoCheck, installMode, cmpVersion, sha256File };
+/** 运行期定时复查：发现新版本后前端红点/提示才能跟上（默认 30 分钟，走缓存规则） */
+function schedulePeriodicCheck(intervalMs = CHECK_INTERVAL_IDLE) {
+  const timer = setInterval(() => { check(false).catch(() => {}); }, intervalMs);
+  if (timer.unref) timer.unref();
+  return timer;
+}
+
+module.exports = { check, status, download, apply, scheduleAutoCheck, schedulePeriodicCheck, installMode, cmpVersion, sha256File };

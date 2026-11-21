@@ -1577,8 +1577,8 @@
       await initBossKey();
       syncAdModeUI();
       if (adDebugOn()) toggleAdDebug(true);   // 上次开着就继续显示
+      startupUpdateCheck(2500);   // 静默检查更新（不依赖 bootstrap 是否成功，先挂上定时器）
       await bootstrap();
-      startupUpdateCheck(5000);   // 静默检查更新：有新版且没提示过这个版本才弹一次
     };
 
     async function loadVersion() {
@@ -1961,6 +1961,9 @@
     }
 
     /* ---------- 启动静默检查（每个版本只提示一次） ---------- */
+    // 后端运行期会定时复查，前端跟着刷新状态，红点/提示不用打开「管理」也会亮
+    setInterval(() => { refreshUpdateStatus().catch(function () {}); }, 5 * 60 * 1000);
+
     function startupUpdateCheck(delayMs) {
       setTimeout(async () => {
         let s = await refreshUpdateStatus();
