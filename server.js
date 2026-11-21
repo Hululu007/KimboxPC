@@ -904,6 +904,8 @@ const REMUX_THREADS = Math.max(0, Math.min(16, Number(process.env.REMUX_THREADS)
 // "idle" | "below_normal"（默认）| "normal"
 const REMUX_PRIORITY = String(process.env.REMUX_PRIORITY || 'below_normal').toLowerCase();
 
+let lastRemuxError = null;   // 最近一次 ffmpeg 异常退出（调试用）
+
 app.get('/api/remux/status', (req, res) => {
   res.json({
     available: !!findFfmpeg(), ffmpeg: findFfmpeg(),
@@ -924,10 +926,19 @@ app.get('/api/remux', (req, res) => {
     remuxSessions.delete(oldest);
   }
 
+  // 站源给的 Referer/Origin 等必须带给 ffmpeg，否则 CDN 403 → 进程直接退出（表现为「声音异常、ffmpeg 没了」）
+  const remuxHdr = requestHeaders(req.query.headers);
+  const remuxUA = remuxHdr['User-Agent'] || DESKTOP_UA;
+  const remuxHeaderLines = Object.entries(remuxHdr)
+    .filter(([k]) => !/^user-agent$/i.test(k))
+    .map(([k, v]) => k + ': ' + v)
+    .join('\r\n');
   const args = [
     '-hide_banner', '-loglevel', 'error',
-    '-user_agent', DESKTOP_UA,
+    '-user_agent', remuxUA,
+    ...(remuxHeaderLines ? ['-headers', remuxHeaderLines + '\r\n'] : []),
     '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '3',
+    '-rw_timeout', '20000000',
     ...(start > 0 ? ['-ss', String(start)] : []),
     '-i', url,
     ...(REMUX_THREADS > 0 ? ['-threads', String(REMUX_THREADS)] : []),
@@ -944,7 +955,13 @@ app.get('/api/remux', (req, res) => {
   }
 
   remuxSessions.add(proc);
-  if (proc.stderr) proc.stderr.resume(); // 丢弃并排空 stderr，防止 64KB 管道阻塞死锁
+  // 一边排空 stderr（防 64KB 阻塞），一边留最后几条，进程退出时能看出原因
+  let errTail = '';
+  if (proc.stderr) {
+    proc.stderr.on('data', (buf) => {
+      errTail = (errTail + buf.toString('utf8')).slice(-1500);
+    });
+  }
 
   // 降低 ffmpeg 优先级，避免抢占播放/界面所需的 CPU
   try {
@@ -969,7 +986,12 @@ app.get('/api/remux', (req, res) => {
   req.on('close', stop);
   res.on('close', stop);
   proc.on('error', () => { try { res.end(); } catch (e) {} stop(); });
-  proc.on('exit', () => { remuxSessions.delete(proc); try { res.end(); } catch (e) {} });
+  proc.on('exit', (code) => {
+    remuxSessions.delete(proc);
+    try { res.end(); } catch (e) {}
+    lastRemuxError = { code, at: Date.now(), url: String(url).slice(0, 160), tail: errTail.trim().slice(-800) };
+    if (code !== 0 && errTail.trim()) appLog('[remux] ffmpeg 退出 code=' + code + ' ' + errTail.trim().slice(-400));
+  });
 });
 
 /* ==================== 播放列表质量探测 ==================== */
