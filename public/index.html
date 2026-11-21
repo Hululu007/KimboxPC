@@ -3671,6 +3671,20 @@
 
     let lastHistorySave = 0;
 
+    // 当前可保存的播放位置。
+    // 浏览器内核（MSE / 兼容）在换集或重置 <video> 的瞬间 currentTime 会回到 0，
+    // 此时 duration 也为 0；若照实保存就会把历史进度清零。
+    function currentSavePosition() {
+      if (isMpv()) return mpvState.position || 0;
+      if (compat.on) return compatPosition();
+      const v = document.getElementById('h5Player');
+      if (!v) return window.__lastGoodPos || 0;
+      const ready = isFinite(v.duration) && v.duration > 0 && v.readyState > 0;
+      const t = isFinite(v.currentTime) ? v.currentTime : 0;
+      if (!ready) return window.__lastGoodPos || 0;
+      return t;
+    }
+
     function saveHistory(force = false) {
       if (!currentDetail) return;
       const v = document.getElementById('h5Player');
@@ -3681,6 +3695,11 @@
       const t = Date.now();
       if (!force && t - lastHistorySave < 8000) return;
       lastHistorySave = t;
+
+      // 位置取「当前可保存位置」；浏览器内核刚被 reset 时不要用 0 覆盖已有进度
+      let pos = currentSavePosition();
+      if (pos > 1) window.__lastGoodPos = pos;
+      else if ((window.__lastGoodPos || 0) > 30) pos = window.__lastGoodPos;
 
       fetch('/api/history', {
         method: 'POST',
@@ -3694,7 +3713,7 @@
           epName: ep.title,
           epIndex: currentEpIdx,
           epUrl: ep.url,
-          position: isMpv() ? (mpvState.position || 0) : (compat.on ? compatPosition() : (isFinite(v.currentTime) ? v.currentTime : 0)),
+          position: pos,
           duration: seekDuration()
         })
       }).catch(() => {});
@@ -4419,6 +4438,8 @@
 
     async function playEpisode(url, resumeAt = 0, opts = {}) {
       syncCacheUI();
+      // 换集/换源时重置「最近可靠位置」，避免把上一集的进度带过来
+      window.__lastGoodPos = resumeAt > 1 ? resumeAt : 0;
       mediaHeaders = (opts && opts.headers) || {};
       // 虫包 playerContent 给的地址可能是 http://127.0.0.1:<port>/...（本地代理），
       // 没有 .m3u8 后缀但本身就能播；必须跳过「当网页解析」的分支。
@@ -5270,7 +5291,7 @@
       }
       if (adDebugOn()) renderAdDebug();
       maybeAutoNext();
-      saveHistory(false);
+      if (isMpv() || compat.on || (pvVideo && pvVideo.duration > 0 && pvVideo.readyState > 0)) saveHistory(false);
       if (osdEnabled()) renderOsd();
 
       if (isMpv()) {
