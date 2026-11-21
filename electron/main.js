@@ -73,6 +73,17 @@ async function startServer() {
     return;
   }
 
+  // 服务端监听失败（端口被占等）是异步抛出的，外层 try/catch 接不到；由 server.js 回调到这里
+  global.__kimboxOnListenError = (e) => {
+    const dup = /EADDRINUSE/i.test(String((e && e.code) || (e && e.message) || e));
+    try {
+      dialog.showErrorBox('KimBoxPC 启动失败', dup
+        ? `端口 ${PORT} 已被占用，通常是上次没完全退出的残留进程。\n\n请打开任务管理器结束所有 electron.exe 后重试，或把 port.txt 改成别的端口。`
+        : `服务启动失败：${(e && e.message) || e}`);
+    } catch (err) {}
+    setTimeout(() => { try { app.quit(); } catch (err) {} }, 100);
+  };
+
   try {
     const srv = require(path.join(ROOT, 'server.js'));
     void srv;
@@ -916,7 +927,6 @@ if (!gotLock) {
     logMain(`child-process-gone type=${details && details.type} reason=${details && details.reason}`);
   });
   process.on('uncaughtException', (e) => logMain(`uncaughtException: ${e && e.stack ? e.stack : e}`));
-  process.on('before-quit', () => logMain('before-quit'));
 
   // 自动更新：服务端执行完覆盖后会发这个事件，由主进程退出，让更新脚本能替换文件
 process.on('kimbox:quit', () => { setTimeout(() => { try { app.quit(); } catch (e) {} }, 300); });
@@ -944,6 +954,7 @@ app.on('will-quit', () => {
 });
 
 app.on('before-quit', () => {
+  logMain('before-quit');
   destroyInstance();
   try { globalShortcut.unregisterAll(); } catch (e) {}
 });

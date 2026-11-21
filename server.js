@@ -1,6 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -87,7 +86,30 @@ if (process.env.TVBOX_WATCH_PARENT === '1') {
   if (watcher.unref) watcher.unref();
 }
 
-app.use(cors());
+// 只允许本机界面自己访问：任何网页都能对 127.0.0.1 发起请求，若放开 CORS，
+// 别人站点的脚本就能 POST /api/reset 清空数据、或用 /api/seg 探测内网。
+// 界面与服务同源，本来不需要 CORS；这里额外校验 Host/Origin，阻断浏览器跨源与 DNS rebinding。
+const LOCAL_HOSTS = [`127.0.0.1:${PORT}`, `localhost:${PORT}`];
+const LOCAL_ORIGINS = [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
+app.use((req, res, next) => {
+  const host = String(req.headers.host || '').toLowerCase();
+  if (!LOCAL_HOSTS.includes(host)) return res.status(403).json({ error: 'forbidden host' });
+  const origin = req.headers.origin;
+  if (origin) {
+  // 只有「会改状态」的方法才校验 Origin：mpv 拉本地代理时会把站源的 Origin 头一并带上（GET），
+  // 一律拒绝会直接把播放打断；而浏览器发起的跨源 POST 一定带 Origin，拦它就能挡住 CSRF。
+  const isRead = req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';
+  if (!isRead && !LOCAL_ORIGINS.includes(String(origin).toLowerCase())) return res.status(403).json({ error: 'forbidden origin' });
+    // 只有本机来源才回 CORS 头；外部站点拿不到响应体（读不了数据）
+    if (LOCAL_ORIGINS.includes(String(origin).toLowerCase())) res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(204).end();
+  }
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 // 安全响应头（CSP / Trusted Types）：必须在静态资源之前注册，否则 index.html 不带这些头
 app.use((req, res, next) => {
@@ -241,6 +263,8 @@ async function applyConfig(row) {
   const fetchRemote = async () => {
     try {
       const parsed = await ConfigParser.load(row.url);
+      // 拉取期间用户可能已切到别的配置源：state.configId 已变，旧结果不能再写回
+      if (state.configId !== row.id) return;
       if (parsed && Array.isArray(parsed.sites) && parsed.sites.length > 0) {
         const oldFingerprint = (state.sites || []).map(s => `${s.key}:${s.api || ''}:${s.name || ''}`).join('|');
         const newFingerprint = parsed.sites.map(s => `${s.key}:${s.api || ''}:${s.name || ''}`).join('|');
@@ -261,6 +285,7 @@ async function applyConfig(row) {
         }
       }
     } catch (e) {
+      if (state.configId !== row.id) return;
       state.loadError = e.message;
       if (!state.sites || state.sites.length === 0) {
         console.error(`[config] 配置源 ${row.name || row.url} 加载失败:`, e.message);
@@ -269,8 +294,10 @@ async function applyConfig(row) {
         console.log(`[config] 远程拉取失败 (${e.message})，继续沿用本地缓存 (${state.sites.length} 站)`);
       }
     } finally {
-      state.loading = false;
-      ConfigRepo.touch(row.id);
+      if (state.configId === row.id) {
+        state.loading = false;
+        ConfigRepo.touch(row.id);
+      }
     }
   };
 
@@ -423,6 +450,7 @@ app.post('/api/configs/:id/sync', async (req, res) => {
       state.activeSite = stillActive || pickDefaultSite(state.sites, row.default_site);
       state.loadError = null;
       state.sitesVersion = Date.now();
+      warmJvmIfNeeded();
     }
 
     res.json({
@@ -531,7 +559,9 @@ app.get('/api/sites/ping', async (req, res) => {
   const todo = [];
 
   for (const s of state.sites) {
-    if (s.isDexSpider) {
+    if (s.type === 3) {
+      // type 3 都是爬虫：dex 的看 JVM 状态；.js 爬虫本程序跑不了，直接标记不支持，不按 CMS 去请求
+      if (!s.isDexSpider) { out[s.key] = { ok: false, ms: 0, unsupported: true }; continue; }
       // 虫包站点不在 ping 里真的加载（首站要十几秒），只回报 JVM 是否就绪
       const js = JvmBridge.status();
       out[s.key] = { ok: js.installed && js.enabled, ms: 0, dex: true, jvm: js.running };
@@ -870,7 +900,9 @@ const probeCache = new Map();
  */
 async function probePlaylist(url, headers, depth = 0) {
   if (!/\.m3u8/i.test(url)) return null;
-  if (probeCache.has(url)) return probeCache.get(url);
+  // 同一个地址带不同 Referer 结果可能不同，缓存键必须把头也算进去
+  const cacheKey = url + '|' + JSON.stringify(headers || {});
+  if (probeCache.has(cacheKey)) return probeCache.get(cacheKey);
   let res;
   try {
     const r = await axios.get(url, {
@@ -901,7 +933,7 @@ async function probePlaylist(url, headers, depth = 0) {
           const sub = await probePlaylist(abs, headers, depth + 1);
           if (sub && !sub.error) {
             sub.master = true;
-            probeCache.set(url, sub);
+            probeCache.set(cacheKey, sub);
             return sub;
           }
         }
@@ -918,7 +950,8 @@ async function probePlaylist(url, headers, depth = 0) {
   } catch (e) {
     res = { error: e.message };
   }
-  probeCache.set(url, res);
+  // 失败不缓存：网络抖动/缺请求头导致的失败应允许下次重试
+  if (!res || !res.error) probeCache.set(cacheKey, res);
   if (probeCache.size > 500) probeCache.delete(probeCache.keys().next().value);
   return res;
 }
@@ -1976,14 +2009,18 @@ server.on('listening', async () => {
 });
 
 server.on('error', (e) => {
+  // 嵌入模式（Electron）下不能直接 process.exit：会把主进程一起带走，用户只看到程序打不开。
+  const embed = process.env.TVBOX_EMBED === '1' && typeof global.__kimboxOnListenError === 'function';
   if (e.code === 'EADDRINUSE') {
     console.error('');
     console.error(`[X] 端口 ${PORT} 已被占用，可能已经有一个实例在运行。`);
     console.error('    1) 先关掉之前的命令行窗口；或');
     console.error(`    2) 换个端口启动:  set PORT=8090  &&  node server.js`);
     console.error('');
+    if (embed) return global.__kimboxOnListenError(e);
     process.exit(1);
   }
   console.error('[X] 服务启动失败:', e.message);
+    if (embed) return global.__kimboxOnListenError(e);
   process.exit(1);
 });
