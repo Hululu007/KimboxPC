@@ -1396,7 +1396,6 @@
       <span class="engine-label">引擎</span>
       <select class="ctrl-rate engine-sel" id="engineSel" onchange="changeEngine(this.value)" title="播放引擎">
         <option value="mpv">mpv（默认）</option>
-        <option value="mse">网页 (MSE)</option>
         <option value="browser">ffmpeg (兼容)</option>
       </select>
       <button class="secondary" id="btnAdFilter" onclick="toggleAdFilter(!adFilterEnabled())" title="开启/关闭插播广告拦截（关闭后完全用源原始列表）">广告拦截：开</button>
@@ -1527,7 +1526,7 @@
             <input type="checkbox" id="adFilterChk" onchange="toggleAdFilter(this.checked)">
             拦截插播广告（默认开启；按区间自动跳过）
           </label>
-          <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢。对 mpv / 兼容 / 网页(MSE) 三个内核都生效">
+          <label class="audio-auto" title="网络不稳时调大，能减少卡顿；调大会让起播稍慢。对 mpv / 兼容 两个内核都生效">
             缓冲
             <select id="cacheSel" class="ctrl-rate" onchange="saveCacheLevel(this.value)" style="width:auto">
               <option value="15">小（15 秒）</option>
@@ -1543,10 +1542,9 @@
 
 
 
-        <div class="row-label" id="engineRowLabel">播放引擎（默认 mpv；想更顺滑可切网页 MSE）：</div>
+        <div class="row-label" id="engineRowLabel">播放引擎（默认 mpv；脏流可切 ffmpeg 兼容）：</div>
         <div class="source-tabs" id="engineBtns">
           <div class="source-tab" data-engine="mpv" onclick="changeEngine('mpv')">mpv 内核（默认）</div>
-          <div class="source-tab" data-engine="mse" onclick="changeEngine('mse')">网页 (MSE)</div>
           <div class="source-tab" data-engine="browser" onclick="changeEngine('browser')">ffmpeg (兼容)</div>
         </div>
 
@@ -3038,8 +3036,6 @@
     /** 探测播放列表封装质量：记录时长、显示提示条、必要时建议换用外部播放器 */
     function probeAndWarn(url, silent) {
       if (!url || !url.includes('.m3u8')) return;
-      // 「网页 (MSE)」是用户主动选的对比内核：时间戳提示在这里只是噪音，直接不提示
-      if (engineMode() === 'mse') return;
       if (url === window.__probeWarnedUrl) return;
       window.__probeWarnedUrl = url;
 
@@ -3057,12 +3053,8 @@
           }
           showSourceWarn(disc);
           if (!disc || silent) return;
-          // 文案必须跟「实际在用哪个内核」一致：
-          // MSE 内核从不转封装，旧文案「已用兼容模式转封装」会让人误以为偷偷起了 ffmpeg。
-          const engine = engineMode();
-          if (engine === 'mse') {
-            showToast(`该源有 ${disc} 处时间戳重置，网页内核(MSE)可能声音异常；切到 mpv 内核可避免`, 5500);
-          } else if (compatEnabled()) {
+          // 兼容内核已经转封装，声音不会变调；其它情况如实提示
+          if (compatEnabled()) {
             showToast(`该源有 ${disc} 处时间戳重置，已用兼容模式转封装，声音异常可换源`, 5000);
           } else {
             showToast(`该源有 ${disc} 处时间戳重置，网页播放可能出现声音异常；可开启兼容模式或切 mpv`, 5500);
@@ -3081,10 +3073,11 @@
     function engineMode() {
       try {
         const v = localStorage.getItem('tvbox_engine');
-        if (v === 'mpv' || v === 'mse' || v === 'browser') return v;
+        if (v === 'mpv' || v === 'browser') return v;
+        // 旧版本存过 mse：该内核已移除，自动迁回 mpv
+        if (v === 'mse') { try { localStorage.setItem('tvbox_engine', 'mpv'); } catch (e) {} return 'mpv'; }
       } catch (e) {}
       // 未设置时：桌面版默认 mpv 内核（音频稳、字幕/音轨控制全），浏览器版默认浏览器引擎。
-      // 「网页 (MSE)」是可选项：画面更顺、CPU 更省，但遇到跨域/证书异常的源可能起不来。
       return (window.kimbox && window.kimbox.isElectron) ? 'mpv' : 'browser';
     }
     function isMpv() { return engineMode() === 'mpv'; }
@@ -3113,7 +3106,6 @@
       syncEngineUI();
 
       if (v === 'mpv') showToast('已切换到 mpv 内核，正在重载…', 2500);
-      else if (v === 'mse') showToast('已切换到网页内核 (MSE)，正在重载…', 2500);
       else showToast('已切换到 ffmpeg 兼容内核，正在重载…', 2500);
 
       if (currentDetail) reloadCurrentEpisode(true, keepPos);
@@ -4625,7 +4617,7 @@
         const w = (v && v.videoWidth) || 0, h = (v && v.videoHeight) || 0;
         let dropped = '?';
         try { const q = v && v.getVideoPlaybackQuality && v.getVideoPlaybackQuality(); if (q) dropped = q.droppedVideoFrames; } catch (e) {}
-        text = '内核 ' + (eng === 'mse' ? '网页 MSE' : 'ffmpeg 兼容') + (compat.on ? '（转封装）' : '') + ' ｜ 解码 浏览器\n' +
+        text = '内核 ffmpeg 兼容' + (compat.on ? '（转封装）' : '') + ' ｜ 解码 浏览器\n' +
                (w && h ? w + 'x' + h : '未加载') + ' ｜ 丢帧 ' + dropped + ' ｜ 缓冲 ' + buf;
       }
       el.textContent = text;
@@ -4652,7 +4644,6 @@
       let how;
       if (eng === 'mpv') how = 'mpv 内核不受影响';
       else if (compat.on) how = '已转封装（ffmpeg copy）';
-      else if (eng === 'mse') how = 'MSE 内核可能声音异常';
       else how = '网页播放可能声音异常，可切兼容/mpv';
       return '有 ' + disc + ' 处时间戳重置（脏流）→ ' + how + (extra ? ' ｜ ' + extra : '');
     }
@@ -4917,10 +4908,10 @@
         if (adRanges.length) showToast(`本集检测到 ${adRanges.length} 段广告，播放到会自动跳过`, 3000);
       }
 
-      // MSE 内核（hls.js）的时间轴是「连续拼接」，广告分片的时长也被算进去；
-      // 而区间是按正片 PTS 算的（mpv 的 time-pos 走的也是 PTS），所以 MSE 下必须把每段
-      // 广告按「它前面所有广告的总时长」整体后移，否则会在广告真正出现前 20 多秒就跳走。
-      if (engineMode() === 'mse' && adRanges.length) {
+      // 浏览器内核（hls.js）的时间轴是「连续拼接」，广告分片的时长也被算进去；
+      // 而区间是按正片 PTS 算的（mpv 的 time-pos 走的也是 PTS），所以浏览器内核下必须把每段
+      // 广告按「它前面所有广告的总时长」整体后移，否则会在广告真正出现前就跳走。
+      if (!isMpv() && adRanges.length) {
         let off = 0;
         adRanges = adRanges.map(rg => {
           const out = [rg[0] + off, rg[1] + off, rg[2] + off];
@@ -4980,12 +4971,10 @@
       // 引擎模式：
       //   mpv     → 上面已返回，走原生解码
       //   browser → ffmpeg 兼容内核：脏流（有时间戳重置）才转封装，干净流走 hls.js
-      //   mse     → 「网页 (MSE)」：强制 hls.js + 浏览器原生解码，从不转封装（用于对比/高配机器）
-      const forceMse = engineMode() === 'mse';
 
       // 兼容模式（按需）：只有检测到「时间戳重置」的脏流才走 ffmpeg 转封装。
       // 干净流直连 hls.js —— 拖动是秒级，而转封装每次 seek 要重启 ffmpeg（约 10 秒）。
-      if (!forceMse && compatEnabled() && /\.m3u8/i.test(playUrl)) {
+      if (compatEnabled() && /\.m3u8/i.test(playUrl)) {
         // 用普通探测判断「是否有时间戳重置」即可（不需要过滤后的统计了）
         let info = await probeQuick(finalUrl, 8000, false);
         if (!info || info.disc === undefined) {
@@ -5007,11 +4996,6 @@
         }
       }
       destroyCompat();
-      // 网页(MSE) 内核：顺手清掉上一个内核可能留下的「时间戳重置」提示条
-      if (forceMse) {
-        const wb = document.getElementById('srcWarn');
-        if (wb) wb.style.display = 'none';
-      }
       probeAndWarn(finalUrl, false);
 
       const seek = () => {
@@ -5023,41 +5007,19 @@
       // 用 isHls 判断（虫包给的本地代理地址可能没有 .m3u8 后缀）
       if (isHls || playUrl.includes('.m3u8')) {
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-          // 「网页 (MSE)」用一套更激进的缓冲/预取参数（参考 KVideo 的配置），
-          // 只影响这个新增引擎，默认 mpv 与 ffmpeg 兼容内核的行为保持不变。
-          const hlsCfg = forceMse
-            ? {
-              enableWorker: true,
-              lowLatencyMode: false,
-              startFragPrefetch: true,
-              xhrSetup: (xhr) => { try { for (const k in mediaHeaders) xhr.setRequestHeader(k, mediaHeaders[k]); } catch (e) {} },
-              // 跟随「缓冲」下拉（默认 120 秒），三个内核语义一致
-              maxBufferLength: cacheSecs(),
-              maxMaxBufferLength: cacheSecs() * 2,
-              maxBufferSize: cacheSecs() * 1000 * 1000,
-              maxBufferHole: 0.5,
-              backBufferLength: 90,
-              fragLoadingMaxRetry: 6,
-              fragLoadingRetryDelay: 1000,
-              manifestLoadingMaxRetry: 4,
-              levelLoadingMaxRetry: 4,
-              fragLoadingTimeOut: 20000,
-              manifestLoadingTimeOut: 10000,
-              maxAudioFramesDrift: 5,
-              enableCEA708Captions: false
-            }
-            : {
-              maxBufferLength: cacheSecs(),
-              maxMaxBufferLength: cacheSecs() * 2,
-              backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
-              enableWorker: true,
-              maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
-              enableCEA708Captions: false,
-              manifestLoadingTimeOut: 15000,
-              fragLoadingTimeOut: 20000,
-              // 虫包给的地址常要求 Referer/Origin：分片请求也要带上
-              xhrSetup: (xhr) => { try { for (const k in mediaHeaders) xhr.setRequestHeader(k, mediaHeaders[k]); } catch (e) {} }
-            };
+          // 浏览器内核（兼容模式下的干净流）的 hls.js 参数
+          const hlsCfg = {
+            maxBufferLength: cacheSecs(),
+            maxMaxBufferLength: cacheSecs() * 2,
+            backBufferLength: 30,      // 跳转后及时丢弃旧缓冲，避免解码器残留导致声音异常
+            enableWorker: true,
+            maxAudioFramesDrift: 5,    // 容忍音频时间戳轻微漂移，减少突然变调
+            enableCEA708Captions: false,
+            manifestLoadingTimeOut: 15000,
+            fragLoadingTimeOut: 20000,
+            // 虫包给的地址常要求 Referer/Origin：分片请求也要带上
+            xhrSetup: (xhr) => { try { for (const k in mediaHeaders) xhr.setRequestHeader(k, mediaHeaders[k]); } catch (e) {} }
+          };
           hls = new Hls(hlsCfg);
           hls.loadSource(playUrl);
           hls.attachMedia(video);
@@ -5510,14 +5472,9 @@
       const box = document.getElementById('srcWarn');
       const txt = document.getElementById('srcWarnText');
       if (!box || !txt) return;
-      // 网页(MSE) 内核下不显示这类提示条
-      if (!disc || disc <= 0 || isMpv() || engineMode() === 'mse') { box.style.display = 'none'; return; }
-      const engine = engineMode();
-      // 「ffmpeg (兼容)」模式下脏流会自动转封装，不需要提示；其它内核如实提示
-      if (engine !== 'mse' && compatEnabled()) { box.style.display = 'none'; return; }
-      txt.textContent = engine === 'mse'
-        ? `该源封装有 ${disc} 处时间戳重置，网页内核(MSE)可能出现声音异常；切到 mpv 内核可避免。`
-        : `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
+      // mpv 内核不受脏流影响；兼容内核会自动转封装 —— 两种情况都不需要提示条
+      if (!disc || disc <= 0 || isMpv() || compatEnabled()) { box.style.display = 'none'; return; }
+      txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
       box.style.display = 'flex';
     }
 
