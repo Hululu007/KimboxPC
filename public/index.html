@@ -2105,6 +2105,7 @@
           body: JSON.stringify({ siteKey: key })
         });
         const d = await r.json();
+        if (d) window.__lastProbe = { disc: Number(d.disc) || 0, duration: Number(d.duration) || 0, segments: Number(d.segments) || 0, at: Date.now() };
         if (d.error) return alert(d.error);
         window.__defaultSite = key;
         updateDefaultSiteUI();
@@ -3030,6 +3031,9 @@
         .then(r => r.json())
         .then(d => {
           const disc = d && d.disc ? d.disc : 0;
+          // 调试面板要用：记录这次探测的封装情况（时间戳重置次数 / 片长 / 分片数）
+          window.__lastProbe = { disc: disc, duration: (d && d.duration) || 0, segments: (d && d.segments) || 0, at: Date.now() };
+          if (adDebugOn()) { try { renderAdDebug(true); } catch (e) {} }
           if (d && d.duration) {
             if (!currentPlaylistDuration) compat.duration = d.duration;
             updateControls();
@@ -4620,6 +4624,22 @@
       if (mpvMetaTimer) { clearInterval(mpvMetaTimer); mpvMetaTimer = null; }
     }
 
+    // 调试面板用：封装（脏流）状态一句话
+    function sourceStateText() {
+      const p = window.__lastProbe;
+      if (!p) return '<span class="ad-dim">尚未探测（该源不走代理或还在探测）</span>';
+      const eng = engineMode();
+      const disc = Number(p.disc) || 0;
+      const extra = (p.duration ? '片长 ' + fmtAd(p.duration) : '') + (p.segments ? ' ｜ 分片 ' + p.segments : '');
+      if (!disc) return '时间戳连续（干净流，无需转封装）' + (extra ? ' ｜ ' + extra : '');
+      let how;
+      if (eng === 'mpv') how = 'mpv 内核不受影响';
+      else if (compat.on) how = '已转封装（ffmpeg copy）';
+      else if (eng === 'mse') how = 'MSE 内核可能声音异常';
+      else how = '网页播放可能声音异常，可切兼容/mpv';
+      return '有 ' + disc + ' 处时间戳重置（脏流）→ ' + how + (extra ? ' ｜ ' + extra : '');
+    }
+
     function renderAdDebug(force) {
       if (!adDebugOn()) return;
       const now = Date.now();
@@ -4658,6 +4678,7 @@
             : (d.wantCut ? '未改动列表（这次没有可剪的广告）' : '跳过：播到广告处自动跳走'))}` +
         `<span class="ad-dim">　来源 </span>${d.proxy ? '本地代理' : '直连'}` +
         `<span class="ad-dim">　片长 </span>${d.duration ? fmtAd(d.duration) : '--'}</div>` +
+        `<div><span class="ad-dim">源 </span>${sourceStateText()}</div>` +
         rows +
         `<div style="margin-top:6px"><span class="ad-dim">分块 </span>${chunkLine}</div>` +
         `<div style="margin-top:6px" class="ad-dim">#n 开始–结束 (时长) → 目标；★ = 判定为广告</div>`);
