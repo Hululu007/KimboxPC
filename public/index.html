@@ -1942,7 +1942,8 @@
         // 不等接口返回（它要等整包下完），边下边轮询进度
         fetch('/api/update/download', { method: 'POST' }).catch(function () {});
         const timer = setInterval(async () => {
-          const st = await refreshUpdateStatus();
+      let st = null;
+      try { st = await refreshUpdateStatus(); } catch (e) { st = null; }
           if (!st || !st.downloading) {
             clearInterval(timer);
             await refreshUpdateStatus();
@@ -4595,10 +4596,13 @@
     }
 
     async function playEpisode(url, resumeAt = 0, opts = {}) {
+      // 领号必须放在最前面：虫包取地址要好几秒，放在 await 之后会导致「后返回的请求覆盖后点的集」
+      const myToken = ++playToken;
+      let myHeaders = (opts && opts.headers) || {};   // 先存局部，确认请求有效后再写回全局
       syncCacheUI();
       // 换集/换源时重置「最近可靠位置」，避免把上一集的进度带过来
       window.__lastGoodPos = resumeAt > 1 ? resumeAt : 0;
-      mediaHeaders = (opts && opts.headers) || {};
+      mediaHeaders = myHeaders;
       // 虫包 playerContent 给的地址可能是 http://127.0.0.1:<port>/...（本地代理），
       // 没有 .m3u8 后缀但本身就能播；必须跳过「当网页解析」的分支。
       let fromSpider = !!(opts && opts.spiderDirect);
@@ -4611,6 +4615,8 @@
         try {
           const r = await (await fetch(`/api/spider/play?siteKey=${encodeURIComponent(siteKey)}&flag=${encodeURIComponent(flag)}&id=${encodeURIComponent(url)}`)).json();
           if (r.error || !r.url) throw new Error(r.error || '站源未返回播放地址');
+            if (myToken !== playToken) return;   // 期间又点了别的集：这次结果作废
+            let nextHeaders = myHeaders;
           if (Number(r.parse) === 1) { showToast('该站源需要网页解析，暂不支持，请换源', 6000); return; }
           url = r.url;
           fromSpider = true;
@@ -4620,14 +4626,15 @@
             fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg: '[spider] play url=' + String(r.url).slice(0, 160) + ' header=' + String(r.header || '').slice(0, 80), src: 'spider' }) }).catch(function () {});
           } catch (e) {}
           if (r.header) {
-            try { mediaHeaders = JSON.parse(r.header) || {}; } catch (e) { mediaHeaders = {}; }
+            try { nextHeaders = JSON.parse(r.header) || {}; } catch (e) { nextHeaders = {}; }
+            myHeaders = nextHeaders;
+            mediaHeaders = myHeaders;
           }
         } catch (e) {
           showToast('站源起播失败：' + e.message + '（可换源，或看 data/jvm/service.log）', 7000);
           return;
         }
       }
-      const token = ++playToken;
       if (tailSkipTimer) { clearTimeout(tailSkipTimer); tailSkipTimer = null; }
       eofHandled = false;
       sawProgress = false;
@@ -4652,11 +4659,11 @@
         showToast('该源需要解析播放地址，正在解析…', 8000);
         try {
           const r = await (await fetch(`/api/resolve?url=${encodeURIComponent(url)}`)).json();
-          if (token !== playToken) return;
+        if (myToken !== playToken) return;
           if (r.error || !r.url) throw new Error(r.error || '解析失败');
           finalUrl = r.url;
         } catch (e) {
-          if (token !== playToken) return;
+        if (myToken !== playToken) return;
           // 失败兜底：有些站点的网页线路是死的（404），但同一部片还有 m3u8 直链线路。
           // 自动切到那条直链重试一次，用户无感。
           const alt = pickDirectLine();
@@ -5186,85 +5193,6 @@
       playEpisode(ep.url, at);
     }
 
-    /* ==================== 音频看门狗 ==================== */
-    // 现象：播放一段时间后声音突然异常，点重载就恢复，说明媒体元素进了坏状态。
-    // 用「音频解码字节数是否还在增长」来判断，卡住就自动重载（保持播放位置）。
-    let audioWatchTimer = null;
-    let lastAudioBytes = -1;
-    let audioStallCount = 0;
-    let lastAutoRecover = 0;
-
-    /** 初始化玩家选项（目前只剩兼容模式） */
-    function initPlayerOptions() {
-      const an = document.getElementById('autoNextChk');
-      if (an) an.checked = autoNextEnabled();
-    }
-
-    /** 有问题源时显示提示条 */
-    function showSourceWarn(disc) {
-      const box = document.getElementById('srcWarn');
-      const txt = document.getElementById('srcWarnText');
-      if (!box || !txt) return;
-      // mpv 内核不受脏流影响；兼容内核会自动转封装 —— 两种情况都不需要提示条
-      if (!disc || disc <= 0 || isMpv()) { box.style.display = 'none'; return; }
-      txt.textContent = `该源封装有 ${disc} 处时间戳重置，网页播放可能出现声音异常。用外部播放器（PotPlayer）播放可彻底避免。`;
-      box.style.display = 'flex';
-    }
-
-    /** 高亮 ⟳ 按钮，提示可以手动重载 */
-    function highlightReload(ms = 12000) {
-      const btn = document.getElementById('btnReload');
-      if (!btn) return;
-      btn.classList.add('alert');
-      clearTimeout(btn._alertTimer);
-      btn._alertTimer = setTimeout(() => btn.classList.remove('alert'), ms);
-    }
-
-    function armAudioWatch() {
-      lastAudioBytes = -1;
-      audioStallCount = 0;
-    }
-
-    function startAudioWatch() {
-      if (audioWatchTimer) return;
-      audioWatchTimer = setInterval(() => {
-        const view = document.getElementById('playerView');
-        if (!view || !view.classList.contains('active')) return;
-
-        const v = pvVideo;
-        if (!v || v.paused || v.seeking || v.ended || v.readyState < 3) { armAudioWatch(); return; }
-        if (v.muted || v.volume === 0) { armAudioWatch(); return; }   // 静音时不判断
-
-        const bytes = v.webkitAudioDecodedByteCount || v.mozAudioDecodedByteCount || 0;
-        if (!bytes) return;                                            // 浏览器不支持该指标
-
-        window.__audioDebug = { bytes, stalls: audioStallCount, recovers: window.__autoRecoverCount || 0 };
-
-        if (bytes === lastAudioBytes) {
-          audioStallCount++;
-          if (audioStallCount >= 3) {                                  // 约 9 秒没有新音频数据
-            const now = Date.now();
-            audioStallCount = 0;
-
-            // 只提示，不打断观看
-            if (now - lastAutoRecover > 30000) {
-              lastAutoRecover = now;
-              window.__autoHintCount = (window.__autoHintCount || 0) + 1;
-              showToast('音频似乎不太对？点右下角 ⟳ 可重载本集', 4000);
-              highlightReload();
-            }
-          }
-        } else {
-          lastAudioBytes = bytes;
-          audioStallCount = 0;
-        }
-      }, 3000);
-    }
-
-    pvVideo.addEventListener('ended', () => { eofHandled = false; maybeAutoNext(); });
-
-    initPlayerOptions();
-    startAudioWatch();
 
     /** 用当前模式的实际音量刷新音量条与静音图标 */
     function updateVolumeUI() {
@@ -5355,6 +5283,12 @@
       'volumechange', 'seeking', 'seeked', 'emptied'].forEach(ev =>
       pvVideo.addEventListener(ev, updateControls));
 
+    // 播放器面板的初始状态（自动连播开关）
+    (function initPlayerOptions() {
+      const an = document.getElementById('autoNextChk');
+      if (an) an.checked = autoNextEnabled();
+    })();
+
     document.getElementById('btnFull').innerHTML = ICON.full;
     document.getElementById('btnReload').innerHTML = ICON.reload;
     document.getElementById('btnHomeRefresh').innerHTML = ICON.reload;
@@ -5374,7 +5308,7 @@
 
     function toggleMute() {
       if (isMpv()) {
-        mpvCmd('cycle', ['mute']).then(() => setTimeout(updateVolumeUI, 200));
+        mpvCmd('cycle', ['mute']).then(() => setTimeout(updateVolumeUI, 200)).catch(() => {});
         mpvState.muted = !mpvState.muted;
         updateVolumeUI();
         showBars();
