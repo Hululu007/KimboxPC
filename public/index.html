@@ -444,13 +444,14 @@
 
     /* ===== 广告调试面板（D 键或顶栏 🐞 开关） ===== */
     .ad-debug-meta {
-      padding: 4px 10px;
+      padding: 5px 10px;
       font-size: 11px;
+      line-height: 1.5;
       color: #8c9ba5;
       border-bottom: 1px solid #222a32;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      /* 允许换行：内容长时分两行显示，不再被省略号截断 */
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     .ad-debug {
@@ -458,7 +459,7 @@
       top: 56px;
       right: 14px;
       z-index: 60;
-      width: 320px;
+      width: 380px;
       max-height: 62%;
       display: none;
       flex-direction: column;
@@ -4591,7 +4592,8 @@
           if (p && p.running) {
             const hw = (p.hwdecCurrent && p.hwdecCurrent !== 'no') ? p.hwdecCurrent : '软解（CPU）';
             const size = (p.width && p.height) ? (p.width + 'x' + p.height) : '未加载';
-            text = '内核 mpv ｜ 解码 ' + hw + ' ｜ ' + size + (p.format ? ' ' + p.format : '') +
+            text = '内核 mpv ｜ 解码 ' + hw + '\n' +
+                   size + (p.format ? ' ｜ ' + p.format : '') +
                    ' ｜ 丢帧 ' + (p.dropped == null ? '?' : p.dropped) + ' ｜ 缓冲 ' + buf;
           } else {
             text = '内核 mpv ｜ 尚未播放';
@@ -4602,8 +4604,8 @@
         const w = (v && v.videoWidth) || 0, h = (v && v.videoHeight) || 0;
         let dropped = '?';
         try { const q = v && v.getVideoPlaybackQuality && v.getVideoPlaybackQuality(); if (q) dropped = q.droppedVideoFrames; } catch (e) {}
-        text = '内核 ' + (eng === 'mse' ? '网页 MSE' : 'ffmpeg 兼容') + (compat.on ? '（转封装）' : '') +
-               ' ｜ 解码 浏览器 ｜ ' + (w && h ? w + 'x' + h : '未加载') + ' ｜ 丢帧 ' + dropped + ' ｜ 缓冲 ' + buf;
+        text = '内核 ' + (eng === 'mse' ? '网页 MSE' : 'ffmpeg 兼容') + (compat.on ? '（转封装）' : '') + ' ｜ 解码 浏览器\n' +
+               (w && h ? w + 'x' + h : '未加载') + ' ｜ 丢帧 ' + dropped + ' ｜ 缓冲 ' + buf;
       }
       el.textContent = text;
     }
