@@ -10,5 +10,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-timeout /t 4 >nul
+ping -n 5 127.0.0.1 >nul
 exit /b 0

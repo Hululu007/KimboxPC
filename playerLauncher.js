@@ -102,7 +102,8 @@ function findInPath(exeName) {
     if (!dir) continue;
     for (const ext of ['.exe', '.bat', '.cmd', '']) {
       const full = path.join(dir, exeName + ext);
-      try { if (fs.existsSync(full)) return full; } catch (e) {}
+      // 必须确认是文件：PATH 里若有同名目录（例如叫 mpv 的文件夹），existsSync 也会为真，启动时才失败
+      try { if (fs.statSync(full).isFile()) return full; } catch (e) {}
     }
   }
   return null;

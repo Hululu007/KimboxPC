@@ -116,7 +116,11 @@ class CmsEngine {
   // 4. 获取详情及选集播放列表
   static async getDetail(site, id) {
     const url = site.api;
-    const data = await this.request(url, { ac: 'videolist', ids: id }) || await this.request(url, { ac: 'detail', ids: id });
+    // 不能用 `||` 兜底：站点回 {list: []} 也是 truthy，ac=detail 永远轮不到（部分站点只认 detail）
+    let data = await this.request(url, { ac: 'videolist', ids: id });
+    if (!data || !Array.isArray(data.list) || data.list.length === 0) {
+      data = await this.request(url, { ac: 'detail', ids: id });
+    }
     if (!data || !Array.isArray(data.list) || data.list.length === 0) return null;
 
     const raw = data.list[0];

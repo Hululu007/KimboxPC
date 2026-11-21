@@ -171,10 +171,13 @@ async function home(site, jar) {
     const data = parseJson(await callWithRetry(site, jar, {
       method: 'homeContent', params: {}, timeoutMs: 60000
     }));
-    const rawClasses = (data && Array.isArray(data.class) ? data.class : []).map(c => ({
-      type_id: String(c.type_id),
-      type_name: cleanTitle(c.type_name)
-    }));
+    // String(undefined) 会得到 "undefined"，后面 !c.type_id 拦不住它 → 前端会多出一个点进去没内容的分类
+    const rawClasses = (data && Array.isArray(data.class) ? data.class : [])
+      .map(c => ({
+        type_id: c && c.type_id !== undefined && c.type_id !== null ? String(c.type_id).trim() : '',
+        type_name: cleanTitle(c && c.type_name)
+      }))
+      .filter(c => c.type_id && c.type_id !== 'undefined' && c.type_id !== 'null' && c.type_name);
     // 与 CmsEngine 一致：配置里写了 categories 白名单就按白名单顺序输出
     let classes = [];
     const seen = new Set();
@@ -216,7 +219,7 @@ async function category(site, tid, page = 1, extend, jar) {
     const list = (data && Array.isArray(data.list)) ? data.list : [];
     return {
       list: list.map(toVideoItem),
-      page: Number(data && data.page) || page,
+      page: Number(data && data.page) || Number(page) || 1,
       pagecount: Number(data && data.pagecount) || 1,
       total: Number(data && data.total) || list.length
     };
