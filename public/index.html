@@ -2667,12 +2667,30 @@ async function loadHome() {
     renderCategories(data.classes || []);
     spiderFilters = (data && data.filters) || {};   // 虫包站点才有
     renderFilterBar('');
-    // 默认进第一个分类（「首页推荐」已移除：部分源会混进三级内容、部分源没数据）
-    const firstClass = (data.classes || []).filter((c) => !isBlockedCatName(c && c.type_name))[0];
-    if (firstClass) {
-      await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[2]);
-      return;
-    }
+      // 默认进第一个有数据的分类（「首页推荐」已移除；空分类只在**直连 CMS 源**上自动隐藏）
+      const classesAll = (data.classes || []).filter((c) => !isBlockedCatName(c && c.type_name));
+      const siteInfo = (window.__siteList || []).find((s) => s.key === activeSiteKey) || {};
+      const isSpiderSite = !!siteInfo.isDexSpider;
+      let firstClass = classesAll[0];
+      if (!isSpiderSite && classesAll.length > 1) {
+        // 先顺序探到第一个有数据的分类（通常几次请求就命中，不会像全量探测那样打爆源站）
+        showStatus('正在检查分类…');
+        firstClass = (await pickFirstNonEmpty(classesAll)) || firstClass;
+        // 其余分类后台继续探，确认空的再隐藏（不改变当前视图）
+        pruneEmptyCategories(classesAll).then((alive) => {
+          if (!alive || !alive.length || alive.length === classesAll.length) return;
+          if (!alive.some((c) => c.type_id === firstClass.type_id)) return;
+          renderCategories(alive);
+          const idx = alive.findIndex((c) => c.type_id === firstClass.type_id);
+          const tabs2 = document.querySelectorAll('#categoryTabs .tab-item');
+          if (idx >= 0 && tabs2[2 + idx]) tabs2[2 + idx].classList.add('active');
+        }).catch(() => {});
+      }
+      if (firstClass) {
+        const tabIdx = 2 + Math.max(0, classesAll.indexOf(firstClass));
+        await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[tabIdx]);
+        return;
+      }
     listState.pagecount = data.pagecount || 1;
     listState.total = data.total || (data.list || []).length;
     renderVideos(data.list || [], false);
@@ -2728,6 +2746,52 @@ async function loadHome() {
     }
 
 // 成人 / 擦边类分类名（包含匹配）：源站可能把这类分类混进首页
+// 空分类自动隐藏：逐个大类拉第 1 页探测（3 并发、10 分钟缓存）。
+// 只有「请求成功且列表为空」才判定为空；超时/报错一律保留，避免网络抖动误杀。
+const catProbeCache = new Map();
+async function categoryHasData(tid) {
+  const key = activeSiteKey + '|' + tid;
+  const hit = catProbeCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.n;
+  try {
+    const r = await fetch(`/api/category?tid=${encodeURIComponent(tid)}&pg=1`);
+    const d = await r.json();
+    const n = Array.isArray(d.list) ? d.list.length : 0;
+    catProbeCache.set(key, { n, at: Date.now() });
+    return n;
+  } catch (e) { return -1; }
+}
+// 按顺序探测，找到第一个「有数据」的分类（错误视为有数据，避免误杀）
+async function pickFirstNonEmpty(classes) {
+  for (const c of classes) {
+    const n = await categoryHasData(c.type_id);
+    if (n !== 0) return c;
+  }
+  return classes[0] || null;
+}
+
+async function pruneEmptyCategories(classes) {
+  const site = activeSiteKey;
+  const alive = [];
+  let errors = 0;
+  const queue = classes.slice();
+  const worker = async () => {
+    while (queue.length) {
+      const c = queue.shift();
+      const n = await categoryHasData(c.type_id);
+      if (site !== activeSiteKey) return;
+      if (n === -1) { errors++; alive.push(c); }
+      else if (n > 0) alive.push(c);
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, () => worker()));
+  if (site !== activeSiteKey) return null;
+  // 疑似站点异常（有过报错、或空分类超过一半）：不裁剪，避免误杀
+  const errLimit = Math.floor(classes.length * 0.3);
+  if (!alive.length || errors > errLimit || alive.length < Math.ceil(classes.length / 2)) return null;
+  return alive.sort((a, b) => classes.indexOf(a) - classes.indexOf(b));
+}
+
 const BLOCKED_CAT_TOKENS = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];
 function isBlockedCatName(name) {
   const n = String(name || '').replace(/\s+/g, '').toLowerCase();
