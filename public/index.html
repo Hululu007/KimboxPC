@@ -2874,7 +2874,9 @@
         return;
       }
       const label = listState.tid ? '分类' : '最新更新';
-      setFooter(`${label} · 第 ${listState.page} / ${listState.pagecount} 页 · 共 ${listState.total} 部`);
+            const totalN = Number(listState.total);
+      const totalText = (Number.isFinite(totalN) && totalN > 0 && totalN < 1e7) ? ` · 共 ${totalN} 部` : '';
+      setFooter(`${label} · 第 ${listState.page} / ${listState.pagecount} 页${totalText}`);
     }
 
     async function doSearch() {

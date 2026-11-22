@@ -47,6 +47,13 @@ function parseJson(data) {
   try { return JSON.parse(String(data)); } catch (e) { return null; }
 }
 
+// 有些站源把 total 写成 2147483647（INT32_MAX 哨兵）或负数，直接透传会让界面显示「共 2147483647 部」
+function sanitizeTotal(v, listLen) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0 || n >= 1e7) return 0;   // 0 = 未知，前端不显示总数
+  return n;
+}
+
 function cleanTitle(s) {
   return String(s || '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -203,7 +210,7 @@ async function home(site, jar) {
       filters: (data && data.filters) || {},
       page: 1,
       pagecount: Number(data && data.pagecount) || 1,
-      total: Number(data && data.total) || list.length
+      total: sanitizeTotal(data && data.total, list.length)
     };
   } catch (e) { throw wrapError(e); }
 }
@@ -221,7 +228,7 @@ async function category(site, tid, page = 1, extend, jar) {
       list: list.map(toVideoItem),
       page: Number(data && data.page) || Number(page) || 1,
       pagecount: Number(data && data.pagecount) || 1,
-      total: Number(data && data.total) || list.length
+      total: sanitizeTotal(data && data.total, list.length)
     };
   } catch (e) { throw wrapError(e); }
 }

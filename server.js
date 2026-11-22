@@ -1684,8 +1684,32 @@ function isPrivateHost(host) {
   return false;
 }
 
+// TVBox/FongMi 的图片地址常带 "@Referer=...@User-Agent=..." 后缀（豆瓣图全靠它过防盗链）
+// 这里把后缀拆出来当请求头，主地址仍用于请求与缓存键
+function splitUrlHeaders(raw) {
+  const s = String(raw || '').trim();
+  const marker = /@(User-Agent|Referer|Cookie|Origin)=/i;
+  const m = s.match(marker);
+  if (!m) return { url: s, headers: {} };
+  const idx = m.index;
+  const url = s.slice(0, idx);
+  const headers = {};
+  const rest = s.slice(idx + 1);
+  const parts = rest.split(/@(?=(?:User-Agent|Referer|Cookie|Origin)=)/i);
+  for (const part of parts) {
+    const kv = part.split('=');
+    if (kv.length < 2) continue;
+    const k = kv[0].trim();
+    const v = kv.slice(1).join('=').trim();
+    if (k && v && /^(User-Agent|Referer|Cookie|Origin)$/i.test(k)) headers[k] = v;
+  }
+  return { url, headers };
+}
+
 app.get('/api/img', async (req, res) => {
-  const url = String(req.query.url || '').trim();
+  const parsed = splitUrlHeaders(req.query.url || '');
+  const url = parsed.url;
+  const urlHeaders = parsed.headers;   // 站源给的 Referer/UA（豆瓣图必须带）
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: '需要 http(s) 绝对地址' });
   let host = '';
   try { host = new URL(url).hostname; } catch (e) { return res.status(400).json({ error: '地址无效' }); }
@@ -1708,7 +1732,7 @@ app.get('/api/img', async (req, res) => {
         timeout: 12000,
         maxContentLength: 6 * 1024 * 1024,
         maxRedirects: 3,
-        headers: { 'User-Agent': DESKTOP_UA, Referer: ref, Accept: 'image/*,*/*' },
+          headers: Object.assign({ 'User-Agent': DESKTOP_UA, Referer: ref, Accept: 'image/*,*/*' }, urlHeaders),
         validateStatus: (s) => s >= 200 && s < 300
       });
       const type = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
