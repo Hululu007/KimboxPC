@@ -1213,6 +1213,11 @@
       }
     }
 </style>
+    <!-- 海报图床预连接：省掉首屏 DNS/TLS 握手 -->
+    <link rel="preconnect" href="https://image.tmdb.org" crossorigin>
+    <link rel="preconnect" href="https://img9.doubanio.com" crossorigin>
+    <link rel="dns-prefetch" href="https://image.tmdb.org">
+    <link rel="dns-prefetch" href="https://img9.doubanio.com">
 </head>
 <body>
 
@@ -2935,6 +2940,12 @@
     }
 
     // 豆瓣图床有防盗链（直连会 418），统一走本地 /api/img 代理；其它图床原样返回
+    // 兜底代理地址：直连失败时用它再试一次（豆瓣图床/防盗链站源都能救回一部分）
+    function proxyUrl(u) {
+      if (!u || !/^https?:\/\//i.test(u)) return '';
+      return '/api/img?url=' + encodeURIComponent(u);
+    }
+
     function imgUrl(u) {
       if (!u) return '';
       return /^https?:\/\/([^/]*\.)?douban(io)?\.com\//i.test(u) ? '/api/img?url=' + encodeURIComponent(u) : u;
@@ -2959,7 +2970,7 @@
 
       setSafeHTML(card, `
         <div class="poster-wrap">
-          <img src="${escapeHtml(imgUrl(v.vod_pic || fallback))}" data-fallback="${escapeHtml(fallback)}" referrerpolicy="no-referrer" loading="lazy" decoding="async" width="300" height="450" fetchpriority="${idx < 6 ? 'high' : 'low'}">
+          <img src="${escapeHtml(imgUrl(v.vod_pic || fallback))}" data-fallback="${escapeHtml(fallback)}" data-proxy="${escapeHtml(proxyUrl(v.vod_pic))}" referrerpolicy="no-referrer" loading="${idx < 12 ? 'eager' : 'lazy'}" decoding="async" width="300" height="450" fetchpriority="${idx < 12 ? 'high' : 'low'}">
           ${v.vod_remarks ? `<div class="remarks">${escapeHtml(v.vod_remarks)}</div>` : ''}
           ${progress}
         </div>
@@ -3746,11 +3757,36 @@
     document.addEventListener('error', (e) => {
       const img = e.target;
       if (!img || img.tagName !== 'IMG' || !img.dataset) return;
+      // 直连失败：先尝试本地图片代理（服务器侧带 UA/Referer 拉，能救回防盗链的图）
+      if (img.dataset.proxy && img.dataset.proxy !== img.src && img.dataset.proxyDone !== '1') {
+        img.dataset.proxyDone = '1';
+        img.src = img.dataset.proxy;
+        return;
+      }
       if (img.dataset.fallback && img.dataset.fbDone !== '1') {
         img.dataset.fbDone = '1';
-        img.src = img.dataset.fallback;   // 海报加载失败时换成占位图
+        img.src = img.dataset.fallback;   // 代理也失败才换占位图
       }
     }, true);
+
+    // 滚动/翻页时把接近视口的懒加载海报提前升级为 eager，避免快速滚动时一片空白
+    (function preloadUpcomingPosters() {
+      let scheduled = false;
+      const upgrade = () => {
+        scheduled = false;
+        const grid = document.getElementById('videoGrid');
+        if (!grid) return;
+        const limit = window.innerHeight * 1.5;
+        grid.querySelectorAll('img[loading="lazy"]').forEach((img) => {
+          const r = img.getBoundingClientRect();
+          if (r.top < limit) img.loading = 'eager';
+        });
+      };
+      const schedule = () => { if (!scheduled) { scheduled = true; setTimeout(upgrade, 120); } };
+      window.addEventListener('scroll', schedule, { passive: true });
+      window.addEventListener('resize', schedule);
+      window.addEventListener('load', schedule);
+    })();
 
     /* ==================== Trusted Types ==================== */
     // 显式走校验策略写入 HTML（策略在 head 里创建，见 __ttHTML）；返回 undefined 时退化为字符串写入，

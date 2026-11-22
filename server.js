@@ -1668,13 +1668,29 @@ const IMG_CACHE_MAX = 120;
 const IMG_TTL = 3600 * 1000;
 const IMG_HOSTS = /(^|\.)(doubanio\.com|douban\.com)$/i;
 
+// 内网/回环地址判定（图片代理的 SSRF 防护）
+function isPrivateHost(host) {
+  const h = String(host || '').toLowerCase();
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
+  if (h === '::1' || h === '0.0.0.0') return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const a = Number(m[1]), b = Number(m[2]);
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
+}
+
 app.get('/api/img', async (req, res) => {
   const url = String(req.query.url || '').trim();
   if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: '需要 http(s) 绝对地址' });
   let host = '';
   try { host = new URL(url).hostname; } catch (e) { return res.status(400).json({ error: '地址无效' }); }
-  // 只代理已知图床：避免把本服务变成任意 URL 的开放代理（SSRF）
-  if (!IMG_HOSTS.test(host)) return res.status(403).json({ error: '仅代理豆瓣图片' });
+  // 允许任意公网图片（很多站源图床会防盗链），但必须挡住内网地址，避免变成 SSRF 跳板
+  if (isPrivateHost(host)) return res.status(403).json({ error: '不允许内网地址' });
 
   const hit = IMG_CACHE.get(url);
   if (hit && Date.now() - hit.at < IMG_TTL) {
@@ -1683,7 +1699,7 @@ app.get('/api/img', async (req, res) => {
     return res.end(hit.buf);
   }
   // 豆瓣对 Referer 敏感：换几个来源各试一次（个别图片只认 www.douban.com）
-  const referers = ['https://movie.douban.com/', 'https://www.douban.com/'];
+  const referers = ['https://' + host + '/', 'https://movie.douban.com/', ''];
   let lastErr = null;
   for (const ref of referers) {
     try {
