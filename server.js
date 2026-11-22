@@ -1759,11 +1759,20 @@ app.get('/api/img', async (req, res) => {
           validateStatus: (s) => s >= 200 && s < 300
         }));
         const type = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
-        if (!/^image\//i.test(type)) { lastErr = 'not-image:' + type; continue; }
+        // 有些图床的 URL 没有扩展名，返回 application/octet-stream：按魔数识别后照样当图片服务
+        let finalType = type;
+        if (!/^image\//i.test(type)) {
+          const b = Buffer.from(r.data);
+          if (b.length > 12 && b[0] === 0xFF && b[1] === 0xD8) finalType = 'image/jpeg';
+          else if (b.length > 8 && b[0] === 0x89 && b[1] === 0x50) finalType = 'image/png';
+          else if (b.length > 6 && b.slice(0, 3).toString('ascii') === 'GIF') finalType = 'image/gif';
+          else if (b.length > 12 && b.slice(0, 4).toString('ascii') === 'RIFF' && b.slice(8, 12).toString('ascii') === 'WEBP') finalType = 'image/webp';
+          else { lastErr = 'not-image:' + type; continue; }
+        }
         const buf = Buffer.from(r.data);
         if (IMG_CACHE.size >= IMG_CACHE_MAX) IMG_CACHE.delete(IMG_CACHE.keys().next().value);
-        IMG_CACHE.set(url, { buf, type, at: Date.now() });
-        res.setHeader('Content-Type', type);
+        IMG_CACHE.set(url, { buf, type: finalType, at: Date.now() });
+        res.setHeader('Content-Type', finalType);
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.end(buf);
       } catch (e) { lastErr = e.message; }
