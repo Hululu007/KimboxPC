@@ -1319,6 +1319,11 @@
         <span id="mUpdProgress" style="color:var(--text-muted);font-size:12px;margin-left:8px"></span>
       </div>
 
+      <div class="cfg-sub" style="margin-top:14px" id="mCatScanRow">
+        分类扫描：<span id="mCatScanText">未扫描</span>
+        <button class="ghost-btn" id="mCatScanBtn" style="margin-left:10px" onclick="startCategoryScan()" title="逐个站点探测分类是否有数据，结果写入缓存（空分类自动隐藏，24 小时有效）">扫描分类</button>
+      </div>
+
       <div class="cfg-sub" style="margin-top:14px" id="mJvmRow">
         站源服务（JVM 虫包）：<span id="mJvmStatusText">未启动</span>
         <button class="ghost-btn" style="margin-left:10px" onclick="restartJvm()">重启服务</button>
@@ -1894,6 +1899,40 @@
       } catch (e) { showToast('打开失败：' + e.message, 4000); }
     }
 
+    // ===== 分类扫描（空分类自动隐藏的数据来源）=====
+    async function refreshCatScanUI() {
+      const txt = document.getElementById('mCatScanText');
+      const btn = document.getElementById('mCatScanBtn');
+      if (!txt) return;
+      try {
+        const s = await (await fetch('/api/categories/summary')).json();
+        if (s.running) {
+          txt.textContent = '扫描中 ' + s.scanned + '/' + s.total + (s.current ? '（' + s.current + '）' : '');
+          if (btn) { btn.disabled = true; btn.textContent = '扫描中…'; }
+        } else {
+          txt.textContent = '已缓存 ' + (s.cached || 0) + '/' + (s.cms || 0) + ' 个直连源' + (s.fresh < s.cached ? '（部分已过期，下次会自动补扫）' : '');
+          if (btn) { btn.disabled = false; btn.textContent = '扫描分类'; }
+        }
+      } catch (e) { txt.textContent = '状态读取失败'; }
+    }
+    let catScanPollTimer = null;
+    async function startCategoryScan() {
+      try {
+        await fetch('/api/categories/scan', { method: 'POST' });
+        showToast('已开始后台扫描分类（可继续浏览，扫完自动收起空分类）', 4000);
+        if (catScanPollTimer) clearInterval(catScanPollTimer);
+        catScanPollTimer = setInterval(async () => {
+          await refreshCatScanUI();
+          const s = await (await fetch('/api/categories/summary')).json().catch(() => ({}));
+          if (!s.running) {
+            clearInterval(catScanPollTimer); catScanPollTimer = null;
+            showToast('分类扫描完成：' + (s.cached || 0) + ' 个源已缓存', 4000);
+            if (currentDetail === null && document.getElementById('playerView').classList.contains('active') === false) loadHome();
+          }
+        }, 1500);
+      } catch (e) { showToast('扫描启动失败：' + e.message, 5000); }
+    }
+
     async function refreshUpdateCache() {
       const el = document.getElementById('mUpdCache');
       if (!el) return;
@@ -2364,6 +2403,7 @@
       await renderConfigManager();
       document.getElementById('cfgMask').classList.add('show');
       refreshUpdateCache();   // 面板显示后再刷新占用（避免渲染前取不到节点）
+      refreshCatScanUI();
     }
 
     function closeConfigManager() {
@@ -2667,28 +2707,22 @@ async function loadHome() {
     renderCategories(data.classes || []);
     spiderFilters = (data && data.filters) || {};   // 虫包站点才有
     renderFilterBar('');
-      // 默认进第一个有数据的分类（「首页推荐」已移除；空分类只在**直连 CMS 源**上自动隐藏）
-      const classesAll = (data.classes || []).filter((c) => !isBlockedCatName(c && c.type_name));
+      // 默认进第一个分类；空分类用服务端扫描缓存过滤（只对直连 CMS 源）
+      const classesRaw = (data.classes || []).filter((c) => !isBlockedCatName(c && c.type_name));
       const siteInfo = (window.__siteList || []).find((s) => s.key === activeSiteKey) || {};
-      const isSpiderSite = !!siteInfo.isDexSpider;
-      let firstClass = classesAll[0];
-      if (!isSpiderSite && classesAll.length > 1) {
-        // 先顺序探到第一个有数据的分类（通常几次请求就命中，不会像全量探测那样打爆源站）
-        showStatus('正在检查分类…');
-        firstClass = (await pickFirstNonEmpty(classesAll)) || firstClass;
-        // 其余分类后台继续探，确认空的再隐藏（不改变当前视图）
-        pruneEmptyCategories(classesAll).then((alive) => {
-          if (!alive || !alive.length || alive.length === classesAll.length) return;
-          if (!alive.some((c) => c.type_id === firstClass.type_id)) return;
-          renderCategories(alive);
-          const idx = alive.findIndex((c) => c.type_id === firstClass.type_id);
-          const tabs2 = document.querySelectorAll('#categoryTabs .tab-item');
-          if (idx >= 0 && tabs2[2 + idx]) tabs2[2 + idx].classList.add('active');
-        }).catch(() => {});
+      let classesAll = classesRaw;
+      if (!siteInfo.isDexSpider) {
+        const cache = await fetchCatCache(activeSiteKey);
+        if (cache && cache.fresh && Array.isArray(cache.empty) && cache.empty.length) {
+          classesAll = classesRaw.filter((x) => !cache.empty.includes(String(x.type_id)));
+        } else {
+          startCatScanWatcher(activeSiteKey, classesRaw);   // 扫完自动收窄标签
+        }
       }
+      if (classesAll.length !== classesRaw.length) renderCategories(classesAll);
+      const firstClass = classesAll[0];
       if (firstClass) {
-        const tabIdx = 2 + Math.max(0, classesAll.indexOf(firstClass));
-        await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[tabIdx]);
+        await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[2]);
         return;
       }
     listState.pagecount = data.pagecount || 1;
@@ -2745,51 +2779,37 @@ async function loadHome() {
       if (el) el.classList.add('active');
     }
 
-// 成人 / 擦边类分类名（包含匹配）：源站可能把这类分类混进首页
-// 空分类自动隐藏：逐个大类拉第 1 页探测（3 并发、10 分钟缓存）。
-// 只有「请求成功且列表为空」才判定为空；超时/报错一律保留，避免网络抖动误杀。
-const catProbeCache = new Map();
-async function categoryHasData(tid) {
-  const key = activeSiteKey + '|' + tid;
-  const hit = catProbeCache.get(key);
-  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.n;
+// 读服务端「分类扫描缓存」；不新鲜时轮询，扫完自动收窄标签
+async function fetchCatCache(siteKey) {
   try {
-    const r = await fetch(`/api/category?tid=${encodeURIComponent(tid)}&pg=1`);
-    const d = await r.json();
-    const n = Array.isArray(d.list) ? d.list.length : 0;
-    catProbeCache.set(key, { n, at: Date.now() });
-    return n;
-  } catch (e) { return -1; }
+    const r = await fetch('/api/categories/cache?siteKey=' + encodeURIComponent(siteKey));
+    return await r.json();
+  } catch (e) { return null; }
 }
-// 按顺序探测，找到第一个「有数据」的分类（错误视为有数据，避免误杀）
-async function pickFirstNonEmpty(classes) {
-  for (const c of classes) {
-    const n = await categoryHasData(c.type_id);
-    if (n !== 0) return c;
-  }
-  return classes[0] || null;
-}
-
-async function pruneEmptyCategories(classes) {
-  const site = activeSiteKey;
-  const alive = [];
-  let errors = 0;
-  const queue = classes.slice();
-  const worker = async () => {
-    while (queue.length) {
-      const c = queue.shift();
-      const n = await categoryHasData(c.type_id);
-      if (site !== activeSiteKey) return;
-      if (n === -1) { errors++; alive.push(c); }
-      else if (n > 0) alive.push(c);
+function startCatScanWatcher(siteKey, classes) {
+  let tries = 0;
+  const tick = async () => {
+    if (activeSiteKey !== siteKey) return;
+    const c = await fetchCatCache(siteKey);
+    if (c && c.fresh && Array.isArray(c.empty) && c.empty.length) {
+      const alive = classes.filter((x) => !c.empty.includes(String(x.type_id)));
+      if (alive.length && alive.length !== classes.length) {
+        renderCategories(alive);
+        const kept = alive.some((x) => x.type_id === listState.tid);
+        const tabs2 = document.querySelectorAll('#categoryTabs .tab-item');
+        if (!kept) {
+          if (tabs2[2]) loadCategory(alive[0].type_id, tabs2[2]);
+        } else {
+          const idx = alive.findIndex((x) => x.type_id === listState.tid);
+          if (tabs2[2 + idx]) tabs2[2 + idx].classList.add('active');
+        }
+      }
+      return;
     }
+    if (++tries > 40) return;
+    setTimeout(tick, 3000);
   };
-  await Promise.all(Array.from({ length: 6 }, () => worker()));
-  if (site !== activeSiteKey) return null;
-  // 疑似站点异常（有过报错、或空分类超过一半）：不裁剪，避免误杀
-  const errLimit = Math.floor(classes.length * 0.3);
-  if (!alive.length || errors > errLimit || alive.length < Math.ceil(classes.length / 2)) return null;
-  return alive.sort((a, b) => classes.indexOf(a) - classes.indexOf(b));
+  setTimeout(tick, 3000);
 }
 
 const BLOCKED_CAT_TOKENS = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];

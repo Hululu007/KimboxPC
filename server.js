@@ -242,6 +242,98 @@ function publicSite(s) {
   };
 }
 
+/* ==================== 分类扫描缓存（空分类自动隐藏） ==================== */
+// 首次导入配置后后台逐站扫描：把「哪些分类有数据 / 为空」写进 data/cache/categories_<configId>.json，
+// 之后启动直接读缓存，只有「站点指纹变化」或「超过 24 小时」才重扫。
+const CAT_SCAN_TTL = 24 * 60 * 60 * 1000;
+const catScanState = { configId: null, running: false, total: 0, scanned: 0, current: '' };
+
+function catCachePath(id) { return path.join(CONFIG_CACHE_DIR, 'categories_' + id + '.json'); }
+function loadCatCache(id) {
+  try {
+    const raw = fs.readFileSync(catCachePath(id), 'utf-8');
+    const obj = JSON.parse(raw);
+    if (obj && obj.version === 1 && obj.sites) return obj;
+  } catch (e) {}
+  return { version: 1, fingerprint: '', sites: {} };
+}
+function saveCatCache(id, obj) {
+  try { fs.writeFileSync(catCachePath(id), JSON.stringify(obj), 'utf-8'); } catch (e) {}
+}
+function sitesFingerprint(sites) {
+  return (sites || []).map((x) => x.key + ':' + (x.api || '') + ':' + (x.name || '')).join('|');
+}
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+// 扫描单个站点：只处理直连 CMS（虫包分类可能依赖 extend，不扫）
+async function scanSiteCategories(site) {
+  let classes = [];
+  try {
+    const home = await CmsEngine.getHome(site);
+    classes = (home && Array.isArray(home.classes) ? home.classes : []).filter((c) => c && c.type_id && !isBlockedCategoryName(c.type_name));
+  } catch (e) { return null; }
+  const empty = [];
+  const alive = [];
+  for (const c of classes) {
+    try {
+      const r = await CmsEngine.getCategory(site, c.type_id, 1);
+      if (Array.isArray(r && r.list) && r.list.length > 0) alive.push(String(c.type_id));
+      else if (r && Array.isArray(r.list)) empty.push(String(c.type_id));
+      else alive.push(String(c.type_id));   // 结构异常：不判空
+    } catch (e) {
+      alive.push(String(c.type_id));        // 报错：不判空
+    }
+    await sleep(120);
+  }
+  return { at: Date.now(), total: classes.length, empty, alive };
+}
+
+// 后台扫描整个配置（跳过缓存新鲜且指纹一致的站点），每扫完一个站就落盘
+async function scanConfigCategories(configId) {
+  if (catScanState.running && catScanState.configId === configId) return;
+  const sites = (state.configId === configId ? state.sites : []) || [];
+  const cmsSites = sites.filter((x) => !x.isDexSpider);
+  const cache = loadCatCache(configId);
+  const fp = sitesFingerprint(sites);
+  const now = Date.now();
+  const todo = cmsSites.filter((site) => {
+    const rec = cache.sites[site.key];
+    return !rec || now - rec.at > CAT_SCAN_TTL;
+  });
+  // 当前站点优先扫，用户切换后能最快用上缓存
+  const activeKey = state.activeSite ? state.activeSite.key : '';
+  todo.sort((a, b) => (a.key === activeKey ? -1 : 0) - (b.key === activeKey ? -1 : 0));
+  if (!todo.length) return;
+
+  catScanState.configId = configId;
+  catScanState.running = true;
+  catScanState.total = todo.length;
+  catScanState.scanned = 0;
+  cache.fingerprint = fp;
+  saveCatCache(configId, cache);
+
+  for (const site of todo) {
+    if (state.configId !== configId) break;
+    catScanState.current = site.name || site.key;
+    const rec = await scanSiteCategories(site);
+    if (rec) { cache.sites[site.key] = rec; saveCatCache(configId, cache); }
+    catScanState.scanned++;
+    await sleep(300);
+  }
+  catScanState.running = false;
+  catScanState.current = '';
+  console.log('[cats] 分类扫描完成: ' + catScanState.scanned + '/' + catScanState.total);
+}
+
+// 配置变化后调用：丢弃指纹不一致/已删除站点的记录，再按需补扫
+function invalidateCatCache(configId, sites) {
+  const cache = loadCatCache(configId);
+  const fp = sitesFingerprint(sites);
+  if (cache.fingerprint && cache.fingerprint !== fp) cache.sites = {};
+  cache.fingerprint = fp;
+  saveCatCache(configId, cache);
+}
+
 async function applyConfig(row) {
   state.configId = row.id;
   state.url = row.url;
@@ -310,6 +402,8 @@ async function applyConfig(row) {
     fetchRemote().catch(() => {});
   }
 
+  // 配置就绪后：丢弃指纹不一致的旧扫描记录，并在后台补扫缺失/过期的站点
+  try { invalidateCatCache(row.id, state.sites || []); scanConfigCategories(row.id).catch(() => {}); } catch (e) {}
   return state;
 }
 
@@ -452,6 +546,7 @@ app.post('/api/configs/:id/sync', async (req, res) => {
       state.activeSite = stillActive || pickDefaultSite(state.sites, row.default_site);
       state.loadError = null;
       state.sitesVersion = Date.now();
+      try { invalidateCatCache(row.id, state.sites || []); scanConfigCategories(row.id).catch(() => {}); } catch (e) {}
       warmJvmIfNeeded();
     }
 
@@ -553,6 +648,42 @@ async function pingOneSite(site, timeoutMs = 6000) {
     return { ms: Date.now() - t0, ok: false, error: e.message };
   }
 }
+
+app.get('/api/categories/cache', (req, res) => {
+  const id = state.configId;
+  if (!id) return res.json({ ok: false, empty: [], fresh: false });
+  const siteKey = String(req.query.siteKey || (state.activeSite && state.activeSite.key) || '');
+  const cache = loadCatCache(id);
+  const rec = cache.sites[siteKey];
+  const fresh = !!(rec && Date.now() - rec.at < CAT_SCAN_TTL);
+  res.json({ ok: !!rec, fresh, at: rec ? rec.at : 0, total: rec ? rec.total : 0, empty: rec ? rec.empty : [] });
+});
+
+app.get('/api/categories/scan/status', (req, res) => {
+  res.json(Object.assign({}, catScanState, { configId: state.configId }));
+});
+
+app.get('/api/categories/summary', (req, res) => {
+  const id = state.configId;
+  const sites = (state.sites || []).filter((x) => !x.isDexSpider);
+  const cache = id ? loadCatCache(id) : { sites: {} };
+  const now = Date.now();
+  let cached = 0, fresh = 0, lastAt = 0;
+  for (const s of sites) {
+    const rec = cache.sites[s.key];
+    if (!rec) continue;
+    cached++;
+    if (now - rec.at < CAT_SCAN_TTL) fresh++;
+    if (rec.at > lastAt) lastAt = rec.at;
+  }
+  res.json({ ok: true, cms: sites.length, cached, fresh, lastAt, running: catScanState.running, scanned: catScanState.scanned, total: catScanState.total, current: catScanState.current });
+});
+
+app.post('/api/categories/scan', (req, res) => {
+  if (!state.configId) return res.status(400).json({ error: '未加载配置源' });
+  scanConfigCategories(state.configId).catch(() => {});
+  res.json({ started: true });
+});
 
 app.get('/api/sites/ping', async (req, res) => {
   const force = String(req.query.force || '') === '1';
