@@ -260,6 +260,8 @@ function loadCatCache(id) {
 function saveCatCache(id, obj) {
   try { fs.writeFileSync(catCachePath(id), JSON.stringify(obj), 'utf-8'); } catch (e) {}
 }
+function siteFingerprint(site) { return (site.key || '') + ':' + (site.api || '') + ':' + (site.name || ''); }
+
 function sitesFingerprint(sites) {
   return (sites || []).map((x) => x.key + ':' + (x.api || '') + ':' + (x.name || '')).join('|');
 }
@@ -285,7 +287,7 @@ async function scanSiteCategories(site) {
     }
     await sleep(120);
   }
-  return { at: Date.now(), total: classes.length, empty, alive };
+  return { at: Date.now(), total: classes.length, empty, alive, fp: siteFingerprint(site) };
 }
 
 // 后台扫描整个配置（跳过缓存新鲜且指纹一致的站点），每扫完一个站就落盘
@@ -298,7 +300,7 @@ async function scanConfigCategories(configId) {
   const now = Date.now();
   const todo = cmsSites.filter((site) => {
     const rec = cache.sites[site.key];
-    return !rec || now - rec.at > CAT_SCAN_TTL;
+    return !rec || rec.fp !== siteFingerprint(site) || now - rec.at > CAT_SCAN_TTL;
   });
   // 当前站点优先扫，用户切换后能最快用上缓存
   const activeKey = state.activeSite ? state.activeSite.key : '';
@@ -328,9 +330,16 @@ async function scanConfigCategories(configId) {
 // 配置变化后调用：丢弃指纹不一致/已删除站点的记录，再按需补扫
 function invalidateCatCache(configId, sites) {
   const cache = loadCatCache(configId);
-  const fp = sitesFingerprint(sites);
-  if (cache.fingerprint && cache.fingerprint !== fp) cache.sites = {};
-  cache.fingerprint = fp;
+  const byKey = new Map((sites || []).map((s) => [s.key, siteFingerprint(s)]));
+  // 只丢弃「已删除」或「api/name 变了」的站点记录；其余已扫过的保留，避免每次同步全量重扫
+  for (const key of Object.keys(cache.sites || {})) {
+    const rec = cache.sites[key];
+    const fp = byKey.get(key);
+    if (!fp || !rec) delete cache.sites[key];
+    else if (!rec.fp) rec.fp = fp;                 // 老缓存没有指纹字段：视为未变更，直接补上
+    else if (rec.fp !== fp) delete cache.sites[key];
+  }
+  cache.fingerprint = sitesFingerprint(sites);
   saveCatCache(configId, cache);
 }
 
@@ -681,6 +690,12 @@ app.get('/api/categories/summary', (req, res) => {
 
 app.post('/api/categories/scan', (req, res) => {
   if (!state.configId) return res.status(400).json({ error: '未加载配置源' });
+  const force = String(req.query.force || '') === '1';
+  if (force) {
+    const cache = loadCatCache(state.configId);
+    cache.sites = {};
+    saveCatCache(state.configId, cache);
+  }
   scanConfigCategories(state.configId).catch(() => {});
   res.json({ started: true });
 });
