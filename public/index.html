@@ -1270,7 +1270,7 @@
   <div class="tabs-bar" id="categoryTabs">
     <div class="tab-item" onclick="showFavorites(this)">⭐ 收藏</div>
     <div class="tab-item" onclick="showHistory(this)">🕘 历史</div>
-    <div class="tab-item active">首页推荐</div>
+    
   </div>
 
   <div class="filter-bar" id="filterBar" style="display:none"></div>
@@ -2499,7 +2499,7 @@
           } else {
             setSafeHTML(document.getElementById('siteSelect'), '<option value="">(未加载站点)</option>');
             document.getElementById('categoryTabs').innerHTML =
-              '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
+              '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div>';
             document.getElementById('videoGrid').replaceChildren();
             document.getElementById('videoGrid').style.display = 'none';
             setFooter('');
@@ -2566,7 +2566,7 @@
         setSafeHTML(document.getElementById('siteSelect'), '<option value="">(未加载站点)</option>');
         setSafeHTML(document.getElementById('configSelect'), '<option value="">(还没有配置源)</option>');
         document.getElementById('categoryTabs').innerHTML =
-          '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div><div class="tab-item active">首页推荐</div>';
+          '<div class="tab-item">⭐ 收藏</div><div class="tab-item">🕘 历史</div>';
         document.getElementById('videoGrid').replaceChildren();
         document.getElementById('videoGrid').style.display = 'none';
         setFooter('');
@@ -2667,6 +2667,12 @@
         listState.total = data.total || (data.list || []).length;
         window.__homeSiteKey = siteAtStart;          // 记录这份列表属于哪个站点
         renderCategories(data.classes || []);
+      // 默认视图 = 第一个分类（原「首页推荐」已移除：部分源会混进三级内容、部分源无数据）
+      const firstClass = (data.classes || [])[0];
+      if (firstClass) {
+        await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[2]);
+        return;
+      }
         spiderFilters = (data && data.filters) || {};   // 虫包站点才有
         renderFilterBar('');
         renderVideos(data.list || [], false);
@@ -2734,18 +2740,14 @@
         return item;
       };
 
-      // 顺序：收藏 → 历史 → 首页推荐 → 分类（收藏/历史放最左）
+      // 顺序：收藏 → 历史 → 分类（收藏/历史放最左）
       mk('⭐ 收藏', (el) => showFavorites(el));
       mk('🕘 历史', (el) => showHistory(el));
-      const homeTab = mk('首页推荐', (el) => { setActiveTab(el); loadHome(); });
-
-      classes.forEach(c => {
-        mk(c.type_name, (el) => loadCategory(c.type_id, el));
-      });
-
-      // 默认高亮「首页推荐」，而不是最左边的「收藏」
-      homeTab.classList.add('active');
-      fitTabs();
+    classes.forEach(c => {
+      mk(c.type_name, (el) => loadCategory(c.type_id, el));
+    });
+    // 不再提供「首页推荐」：有些源会混进三级内容、有些源没数据；默认直接进第一个分类
+    fitTabs();
     }
 
     /**
