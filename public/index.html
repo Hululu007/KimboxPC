@@ -2653,36 +2653,36 @@
       return '&extend=' + encodeURIComponent(JSON.stringify(sel));
     }
 
-    async function loadHome() {
-      hideToolbar();
-      listState = { mode: 'category', kind: null, tid: '', page: 1, pagecount: 1, loading: true, total: 0 };
-      const siteAtStart = activeSiteKey;
-      showStatus('正在获取视频列表...');
-      try {
-        const resp = await fetch('/api/home');
-        const data = await resp.json();
-        if (siteAtStart !== activeSiteKey) return;   // 请求期间切了站点，结果作废
-        listState.loading = false;
-        listState.pagecount = data.pagecount || 1;
-        listState.total = data.total || (data.list || []).length;
-        window.__homeSiteKey = siteAtStart;          // 记录这份列表属于哪个站点
-        renderCategories(data.classes || []);
-      // 默认视图 = 第一个分类（原「首页推荐」已移除：部分源会混进三级内容、部分源无数据）
-      const firstClass = (data.classes || [])[0];
-      if (firstClass) {
-        await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[2]);
-        return;
-      }
-        spiderFilters = (data && data.filters) || {};   // 虫包站点才有
-        renderFilterBar('');
-        renderVideos(data.list || [], false);
-        updateFooter();
-        maybeLoadMore();
-      } catch (e) {
-        listState.loading = false;
-        showStatus('加载视频失败: ' + e.message);
-      }
+async function loadHome() {
+  hideToolbar();
+  listState = { mode: 'category', kind: null, tid: '', page: 1, pagecount: 1, loading: true, total: 0 };
+  const siteAtStart = activeSiteKey;
+  showStatus('正在获取视频列表...');
+  try {
+    const resp = await fetch('/api/home');
+    const data = await resp.json();
+    if (siteAtStart !== activeSiteKey) return;   // 请求期间切了站点，结果作废
+    listState.loading = false;
+    window.__homeSiteKey = siteAtStart;
+    renderCategories(data.classes || []);
+    spiderFilters = (data && data.filters) || {};   // 虫包站点才有
+    renderFilterBar('');
+    // 默认进第一个分类（「首页推荐」已移除：部分源会混进三级内容、部分源没数据）
+    const firstClass = (data.classes || []).filter((c) => !isBlockedCatName(c && c.type_name))[0];
+    if (firstClass) {
+      await loadCategory(firstClass.type_id, document.querySelectorAll('#categoryTabs .tab-item')[2]);
+      return;
     }
+    listState.pagecount = data.pagecount || 1;
+    listState.total = data.total || (data.list || []).length;
+    renderVideos(data.list || [], false);
+    updateFooter();
+    maybeLoadMore();
+  } catch (e) {
+    listState.loading = false;
+    showStatus('加载视频失败: ' + e.message);
+  }
+}
 
     /* ---------- 回到顶部（右下角悬浮按钮） ---------- */
     (function initBackTop() {
@@ -2727,7 +2727,15 @@
       if (el) el.classList.add('active');
     }
 
+// 成人 / 擦边类分类名（包含匹配）：源站可能把这类分类混进首页
+const BLOCKED_CAT_TOKENS = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];
+function isBlockedCatName(name) {
+  const n = String(name || '').replace(/\s+/g, '').toLowerCase();
+  return !!n && BLOCKED_CAT_TOKENS.some((t) => n.includes(t));
+}
+
     function renderCategories(classes) {
+      classes = (classes || []).filter((c) => !isBlockedCatName(c && c.type_name));
       const bar = document.getElementById('categoryTabs');
       bar.replaceChildren();
 

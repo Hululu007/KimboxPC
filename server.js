@@ -602,12 +602,24 @@ function requireSite(res) {
   return true;
 }
 
+/* ==================== 分类屏蔽（成人 / 擦边类） ==================== */
+// 按分类名包含匹配：伦理片/理论片/三级/福利 等一律不展示（源站可能混入这些分类）
+const BLOCKED_CATEGORY_TOKENS = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];
+function isBlockedCategoryName(name) {
+  const n = String(name || '').replace(/\s+/g, '').toLowerCase();
+  if (!n) return false;
+  return BLOCKED_CATEGORY_TOKENS.some((t) => n.includes(t));
+}
+
 app.get('/api/home', async (req, res) => {
   if (!requireSite(res)) return;
   try {
-    res.json(state.activeSite.isDexSpider
+    const home = state.activeSite.isDexSpider
       ? await SpiderEngine.home(state.activeSite, state.spider)
-      : await CmsEngine.getHome(state.activeSite));
+      : await CmsEngine.getHome(state.activeSite);
+    // 过滤成人 / 擦边类分类（源站可能混进这些分类）
+    if (home && Array.isArray(home.classes)) home.classes = home.classes.filter((c) => !isBlockedCategoryName(c && c.type_name));
+    res.json(home);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
