@@ -1323,6 +1323,12 @@
         分类扫描：<span id="mCatScanText">未扫描</span>
         <button class="ghost-btn" id="mCatScanBtn" style="margin-left:10px" onclick="startCategoryScan()" title="逐个站点探测分类是否有数据，结果写入缓存（空分类自动隐藏，24 小时有效）">扫描分类</button>
       </div>
+      <div class="cfg-sub" style="margin-top:10px" id="mCatFilterRow">
+        分类过滤：<span id="mCatFilterText">读取中…</span>
+        <button class="ghost-btn" id="mCatFilterOpen" style="margin-left:10px" onclick="openCatFilterFile()" title="用记事本打开程序目录下的 category-filter.json，改完点「重新加载」生效">打开文件</button>
+        <button class="ghost-btn" id="mCatFilterReload" style="margin-left:6px" onclick="reloadCatFilter()" title="重新读取 category-filter.json（改完规则不用重启）">重新加载</button>
+      </div>
+
 
       <div class="cfg-sub" style="margin-top:14px" id="mJvmRow">
         站源服务（JVM 虫包）：<span id="mJvmStatusText">未启动</span>
@@ -1900,6 +1906,31 @@
     }
 
     // ===== 分类扫描（空分类自动隐藏的数据来源）=====
+    // ===== 分类过滤文件（category-filter.json，用户可编辑）=====
+    async function refreshCatFilterUI() {
+      const txt = document.getElementById('mCatFilterText');
+      if (!txt) return;
+      try {
+        const s = await (await fetch('/api/category-filter')).json();
+        txt.textContent = (s.block || 0) + ' 条屏蔽 · ' + (s.allow || 0) + ' 条白名单' + (s.sites ? ' · ' + s.sites + ' 个站点覆盖' : '');
+      } catch (e) { txt.textContent = '读取失败'; }
+    }
+    async function openCatFilterFile() {
+      try {
+        const r = await (await fetch('/api/category-filter/open', { method: 'POST' })).json();
+        if (r && r.ok) showToast('已打开 category-filter.json，改完点「重新加载」', 4000);
+        else showToast('打开失败：' + ((r && r.error) || '未知错误'), 5000);
+      } catch (e) { showToast('打开失败：' + e.message, 5000); }
+    }
+    async function reloadCatFilter() {
+      try {
+        const r = await (await fetch('/api/category-filter/reload', { method: 'POST' })).json();
+        showToast('已重新加载：' + (r.block || 0) + ' 条屏蔽 · ' + (r.allow || 0) + ' 条白名单', 4000);
+        await refreshCatFilterUI();
+        loadHome();
+      } catch (e) { showToast('重新加载失败：' + e.message, 5000); }
+    }
+
     async function refreshCatScanUI() {
       const txt = document.getElementById('mCatScanText');
       const btn = document.getElementById('mCatScanBtn');
@@ -1923,6 +1954,7 @@
         if (catScanPollTimer) clearInterval(catScanPollTimer);
         catScanPollTimer = setInterval(async () => {
           await refreshCatScanUI();
+      refreshCatFilterUI();
           const s = await (await fetch('/api/categories/summary')).json().catch(() => ({}));
           if (!s.running) {
             clearInterval(catScanPollTimer); catScanPollTimer = null;

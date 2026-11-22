@@ -246,6 +246,8 @@ function publicSite(s) {
 // 首次导入配置后后台逐站扫描：把「哪些分类有数据 / 为空」写进 data/cache/categories_<configId>.json，
 // 之后启动直接读缓存，只有「站点指纹变化」或「超过 24 小时」才重扫。
 const CAT_SCAN_TTL = 24 * 60 * 60 * 1000;
+const CAT_BASELINE_TTL = 7 * 24 * 60 * 60 * 1000;   // 随包基线：7 天内不重扫（可手动强制）
+const CAT_BASELINE_FILE = path.join(__dirname, 'category-baseline.json');
 const catScanState = { configId: null, running: false, total: 0, scanned: 0, current: '' };
 
 function catCachePath(id) { return path.join(CONFIG_CACHE_DIR, 'categories_' + id + '.json'); }
@@ -260,6 +262,33 @@ function loadCatCache(id) {
 function saveCatCache(id, obj) {
   try { fs.writeFileSync(catCachePath(id), JSON.stringify(obj), 'utf-8'); } catch (e) {}
 }
+// 随程序分发的分类基线（开发者全量扫描的结果）：命中就不再扫描，用户侧基本秒开
+let baselineCache = null;
+function loadBaseline() {
+  if (baselineCache !== null) return baselineCache;
+  try {
+    const raw = fs.readFileSync(CAT_BASELINE_FILE, 'utf-8');
+    const obj = JSON.parse(raw);
+    baselineCache = (obj && obj.version === 1 && obj.sites) ? obj : { version: 1, at: 0, sites: {} };
+  } catch (e) { baselineCache = { version: 1, at: 0, sites: {} }; }
+  return baselineCache;
+}
+function normalizeApi(api) { return String(api || '').trim().replace(/\/+$/, '').toLowerCase(); }
+function seedFromBaseline(configId, sites) {
+  const base = loadBaseline();
+  if (!base.sites || !Object.keys(base.sites).length) return;
+  const cache = loadCatCache(configId);
+  let seeded = 0;
+  for (const site of sites || []) {
+    if (cache.sites[site.key]) continue;
+    const rec = base.sites[normalizeApi(site.api)];
+    if (!rec) continue;
+    cache.sites[site.key] = { at: Date.now(), total: rec.total || 0, empty: rec.empty || [], alive: rec.alive || [], fp: siteFingerprint(site), src: 'baseline' };
+    seeded++;
+  }
+  if (seeded) { saveCatCache(configId, cache); console.log('[cats] 使用随包基线: ' + seeded + ' 个站点'); }
+}
+
 function siteFingerprint(site) { return (site.key || '') + ':' + (site.api || '') + ':' + (site.name || ''); }
 
 function sitesFingerprint(sites) {
@@ -272,7 +301,7 @@ async function scanSiteCategories(site) {
   let classes = [];
   try {
     const home = await CmsEngine.getHome(site);
-    classes = (home && Array.isArray(home.classes) ? home.classes : []).filter((c) => c && c.type_id && !isBlockedCategoryName(c.type_name));
+    classes = (home && Array.isArray(home.classes) ? home.classes : []).filter((c) => c && c.type_id && !isBlockedCategoryName(c.type_name, site));
   } catch (e) { return null; }
   const empty = [];
   const alive = [];
@@ -300,7 +329,8 @@ async function scanConfigCategories(configId) {
   const now = Date.now();
   const todo = cmsSites.filter((site) => {
     const rec = cache.sites[site.key];
-    return !rec || rec.fp !== siteFingerprint(site) || now - rec.at > CAT_SCAN_TTL;
+    const ttl = (rec && rec.src === 'baseline') ? CAT_BASELINE_TTL : CAT_SCAN_TTL;
+    return !rec || rec.fp !== siteFingerprint(site) || now - rec.at > ttl;
   });
   // 当前站点优先扫，用户切换后能最快用上缓存
   const activeKey = state.activeSite ? state.activeSite.key : '';
@@ -412,7 +442,7 @@ async function applyConfig(row) {
   }
 
   // 配置就绪后：丢弃指纹不一致的旧扫描记录，并在后台补扫缺失/过期的站点
-  try { invalidateCatCache(row.id, state.sites || []); scanConfigCategories(row.id).catch(() => {}); } catch (e) {}
+  try { invalidateCatCache(row.id, state.sites || []); seedFromBaseline(row.id, state.sites || []); scanConfigCategories(row.id).catch(() => {}); } catch (e) {}
   return state;
 }
 
@@ -672,6 +702,39 @@ app.get('/api/categories/scan/status', (req, res) => {
   res.json(Object.assign({}, catScanState, { configId: state.configId }));
 });
 
+app.post('/api/categories/export-baseline', (req, res) => {
+  const id = state.configId;
+  if (!id) return res.status(400).json({ error: '未加载配置源' });
+  const cache = loadCatCache(id);
+  const out = { version: 1, at: Date.now(), sites: {} };
+  for (const s of (state.sites || [])) {
+    const rec = cache.sites[s.key];
+    if (!rec) continue;
+    out.sites[normalizeApi(s.api)] = { name: s.name, at: rec.at, total: rec.total, empty: rec.empty, alive: rec.alive };
+  }
+  try { fs.writeFileSync(CAT_BASELINE_FILE, JSON.stringify(out), 'utf-8'); } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true, sites: Object.keys(out.sites).length, at: out.at });
+});
+
+app.get('/api/category-filter', (req, res) => {
+  const cfg = loadCategoryFilter();
+  res.json({ ok: true, file: CAT_FILTER_FILE, block: (cfg.block || []).length, allow: (cfg.allow || []).length, sites: Object.keys(cfg.sites || {}).length });
+});
+
+app.post('/api/category-filter/reload', (req, res) => {
+  catFilterCache = { mtime: 0, data: null };
+  const cfg = loadCategoryFilter();
+  res.json({ ok: true, block: (cfg.block || []).length, allow: (cfg.allow || []).length });
+});
+
+app.post('/api/category-filter/open', (req, res) => {
+  try {
+    const cp = require('child_process');
+    cp.execFile('explorer.exe', ['/select,' + CAT_FILTER_FILE], () => {});
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/categories/summary', (req, res) => {
   const id = state.configId;
   const sites = (state.sites || []).filter((x) => !x.isDexSpider);
@@ -750,11 +813,54 @@ function requireSite(res) {
 
 /* ==================== 分类屏蔽（成人 / 擦边类） ==================== */
 // 按分类名包含匹配：伦理片/理论片/三级/福利 等一律不展示（源站可能混入这些分类）
-const BLOCKED_CATEGORY_TOKENS = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];
-function isBlockedCategoryName(name) {
+const CAT_FILTER_FILE = path.join(__dirname, 'category-filter.json');
+const DEFAULT_CAT_BLOCK = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];
+let catFilterCache = { mtime: 0, data: null };
+function defaultCatFilter() { return { version: 1, block: DEFAULT_CAT_BLOCK.slice(), allow: [], sites: {} }; }
+// 读取（文件不存在时自动生成一份带默认规则的，方便用户直接编辑）
+function loadCategoryFilter() {
+  try {
+    const st = fs.statSync(CAT_FILTER_FILE);
+    if (catFilterCache.data && st.mtimeMs === catFilterCache.mtime) return catFilterCache.data;
+    const raw = fs.readFileSync(CAT_FILTER_FILE, 'utf-8');
+    const obj = JSON.parse(raw);
+    const norm = (arr) => (Array.isArray(arr) ? arr.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 500) : []);
+    const data = {
+      version: 1,
+      block: norm(obj && obj.block).length ? norm(obj.block) : DEFAULT_CAT_BLOCK.slice(),
+      allow: norm(obj && obj.allow),
+      sites: (obj && obj.sites && typeof obj.sites === 'object') ? obj.sites : {}
+    };
+    catFilterCache = { mtime: st.mtimeMs, data };
+    return data;
+  } catch (e) {
+    if (catFilterCache.data) return catFilterCache.data;   // 文件写坏了：继续用上一次成功的规则
+    try {
+      if (!fs.existsSync(CAT_FILTER_FILE)) fs.writeFileSync(CAT_FILTER_FILE, JSON.stringify(defaultCatFilter(), null, 2), 'utf-8');
+    } catch (err) {}
+    const d = defaultCatFilter();
+    catFilterCache = { mtime: 0, data: d };
+    return d;
+  }
+}
+function siteRuleMatches(ruleKey, site) {
+  if (!ruleKey || !site) return false;
+  const k = String(ruleKey).trim().toLowerCase();
+  return k === String(site.key || '').toLowerCase() || k === normalizeApi(site.api);
+}
+function isBlockedCategoryName(name, site) {
   const n = String(name || '').replace(/\s+/g, '').toLowerCase();
   if (!n) return false;
-  return BLOCKED_CATEGORY_TOKENS.some((t) => n.includes(t));
+  const cfg = loadCategoryFilter();
+  const hit = (list) => Array.isArray(list) && list.some((t) => { const x = String(t || '').replace(/\s+/g, '').toLowerCase(); return x && n.includes(x); });
+  // 站点级规则优先：sites 里 allow 命中就直接保留，block 命中就屏蔽
+  for (const [k, v] of Object.entries(cfg.sites || {})) {
+    if (!siteRuleMatches(k, site)) continue;
+    if (hit(v && v.allow)) return false;
+    if (hit(v && v.block)) return true;
+  }
+  if (hit(cfg.allow)) return false;   // 全局白名单优先
+  return hit(cfg.block);
 }
 
 app.get('/api/home', async (req, res) => {
@@ -764,7 +870,7 @@ app.get('/api/home', async (req, res) => {
       ? await SpiderEngine.home(state.activeSite, state.spider)
       : await CmsEngine.getHome(state.activeSite);
     // 过滤成人 / 擦边类分类（源站可能混进这些分类）
-    if (home && Array.isArray(home.classes)) home.classes = home.classes.filter((c) => !isBlockedCategoryName(c && c.type_name));
+    if (home && Array.isArray(home.classes)) home.classes = home.classes.filter((c) => !isBlockedCategoryName(c && c.type_name, state.activeSite));
     res.json(home);
   } catch (e) {
     res.status(500).json({ error: e.message });
