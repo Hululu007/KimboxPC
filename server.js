@@ -755,7 +755,8 @@ app.post('/api/categories/scan', (req, res) => {
     cache.sites = {};
     saveCatCache(state.configId, cache);
   }
-  scanConfigCategories(state.configId, 'all').catch(() => {});
+  const mode = String(req.query.mode || '') === 'missing' ? 'missing' : 'all';
+  scanConfigCategories(state.configId, mode).catch(() => {});
   res.json({ started: true });
 });
 

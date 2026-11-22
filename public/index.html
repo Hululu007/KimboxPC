@@ -1321,7 +1321,8 @@
 
       <div class="cfg-sub" style="margin-top:14px" id="mCatScanRow">
         分类扫描：<span id="mCatScanText">未扫描</span>
-        <button class="ghost-btn" id="mCatScanBtn" style="margin-left:10px" onclick="startCategoryScan()" title="重新扫描全部直连源的分类（只在需要时手动点；平时只在新增源时自动补扫）">重新扫描全部分类</button>
+        <button class="ghost-btn" id="mCatScanNewBtn" style="margin-left:10px" onclick="startCategoryScan('missing')" title="只扫描还没有扫描记录的直连源（新导入的站点）">只扫新源</button>
+        <button class="ghost-btn" id="mCatScanBtn" style="margin-left:6px" onclick="startCategoryScan('all')" title="重新扫描全部直连源的分类（耗时几分钟，可继续使用）">全量重扫</button>
       </div>
       <div class="cfg-sub" style="margin-top:10px" id="mCatFilterRow">
         分类过滤：<span id="mCatFilterText">读取中…</span>
@@ -1937,24 +1938,28 @@
     async function refreshCatScanUI() {
       const txt = document.getElementById('mCatScanText');
       const btn = document.getElementById('mCatScanBtn');
+      const btnNew = document.getElementById('mCatScanNewBtn');
       if (!txt) return;
       try {
         const s = await (await fetch('/api/categories/summary')).json();
         if (s.running) {
           txt.textContent = '扫描中 ' + s.scanned + '/' + s.total + (s.current ? '（' + s.current + '）' : '');
           if (btn) { btn.disabled = true; btn.textContent = '扫描中…'; }
+          if (btnNew) btnNew.disabled = true;
         } else {
           txt.textContent = '已缓存 ' + (s.cached || 0) + '/' + (s.cms || 0) + ' 个直连源';
-          if (btn) { btn.disabled = false; btn.textContent = '重新扫描全部分类'; }
+          if (btn) { btn.disabled = false; btn.textContent = '全量重扫'; }
+          if (btnNew) { btnNew.disabled = false; btnNew.textContent = '只扫新源'; }
         }
       } catch (e) { txt.textContent = '状态读取失败'; }
     }
     let catScanPollTimer = null;
-    async function startCategoryScan() {
-      if (!confirm('将重新扫描全部直连源的分类（可能耗时几分钟，期间可继续使用）。继续？')) return;
+    async function startCategoryScan(mode) {
+      const scanMode = mode === 'missing' ? 'missing' : 'all';
+      if (scanMode === 'all' && !confirm('将重新扫描全部直连源的分类（可能耗时几分钟，期间可继续使用）。继续？')) return;
       try {
-        await fetch('/api/categories/scan', { method: 'POST' });
-        showToast('已开始重新扫描全部分类（可继续使用，扫完自动更新标签）', 4000);
+        await fetch('/api/categories/scan?mode=' + scanMode, { method: 'POST' });
+        showToast(scanMode === 'missing' ? '开始补扫新源（没有记录的分类）' : '开始全量重扫（可继续使用，扫完自动更新标签）', 4000);
         if (catScanPollTimer) clearInterval(catScanPollTimer);
         catScanPollTimer = setInterval(async () => {
           await refreshCatScanUI();
