@@ -1686,6 +1686,19 @@ function isPrivateHost(host) {
 
 // TVBox/FongMi 的图片地址常带 "@Referer=...@User-Agent=..." 后缀（豆瓣图全靠它过防盗链）
 // 这里把后缀拆出来当请求头，主地址仍用于请求与缓存键
+// 图片代理的并发闸门：豆瓣一被并发打就容易 403，串行化到 3 个并发并重试一次更稳
+let imgActive = 0;
+const imgWaiters = [];
+async function withImgSlot(fn) {
+  if (imgActive >= 3) await new Promise((r) => imgWaiters.push(r));
+  imgActive++;
+  try { return await fn(); } finally {
+    imgActive--;
+    const next = imgWaiters.shift();
+    if (next) next();
+  }
+}
+
 function splitUrlHeaders(raw) {
   const s = String(raw || '').trim();
   const marker = /@(User-Agent|Referer|Cookie|Origin)=/i;
@@ -1727,14 +1740,14 @@ app.get('/api/img', async (req, res) => {
   let lastErr = null;
   for (const ref of referers) {
     try {
-      const r = await axios.get(url, {
+      const r = await withImgSlot(() => axios.get(url, {
         responseType: 'arraybuffer',
         timeout: 12000,
         maxContentLength: 6 * 1024 * 1024,
         maxRedirects: 3,
           headers: Object.assign({ 'User-Agent': DESKTOP_UA, Referer: ref, Accept: 'image/*,*/*' }, urlHeaders),
         validateStatus: (s) => s >= 200 && s < 300
-      });
+      }));
       const type = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
       if (!/^image\//i.test(type)) { lastErr = 'not-image:' + type; continue; }
       const buf = Buffer.from(r.data);

@@ -2943,15 +2943,20 @@
 
     // 豆瓣图床有防盗链（直连会 418），统一走本地 /api/img 代理；其它图床原样返回
     // 兜底代理地址：直连失败时用它再试一次（豆瓣图床/防盗链站源都能救回一部分）
+    // 兜底代理地址：直连失败时用它再试一次（服务器会拆 @Referer 后缀当请求头）
     function proxyUrl(u) {
-      if (!u || !/^https?:\/\//i.test(u)) return '';
-      return '/api/img?url=' + encodeURIComponent(u);
+      if (!u || !/^https?:\/\//i.test(String(u))) return '';
+      return '/api/img?url=' + encodeURIComponent(String(u));
     }
 
+
+    // TVBox 的图片地址可能带 "@Referer=...@User-Agent=..." 后缀（浏览器发不了这种头，URL 也会失效）；
+    // 豆瓣图本身允许直连，所以先剥掉后缀直接用浏览器加载——直连失败再由 data-proxy 兜底走本地代理。
     function imgUrl(u) {
       if (!u) return '';
-      return /^https?:\/\/([^/]*\.)?douban(io)?\.com\//i.test(u) ? '/api/img?url=' + encodeURIComponent(u) : u;
+      return String(u).replace(/@(User-Agent|Referer|Cookie|Origin)=[\s\S]*$/i, '');
     }
+
 
     function buildCard(v, idx = 0) {
       const siteKey = v.siteKey || activeSiteKey;
