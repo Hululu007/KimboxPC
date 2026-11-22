@@ -245,8 +245,6 @@ function publicSite(s) {
 /* ==================== 分类扫描缓存（空分类自动隐藏） ==================== */
 // 首次导入配置后后台逐站扫描：把「哪些分类有数据 / 为空」写进 data/cache/categories_<configId>.json，
 // 之后启动直接读缓存，只有「站点指纹变化」或「超过 24 小时」才重扫。
-const CAT_SCAN_TTL = 24 * 60 * 60 * 1000;
-const CAT_BASELINE_TTL = 7 * 24 * 60 * 60 * 1000;   // 随包基线：7 天内不重扫（可手动强制）
 const CAT_BASELINE_FILE = path.join(__dirname, 'category-baseline.json');
 const catScanState = { configId: null, running: false, total: 0, scanned: 0, current: '' };
 
@@ -320,18 +318,16 @@ async function scanSiteCategories(site) {
 }
 
 // 后台扫描整个配置（跳过缓存新鲜且指纹一致的站点），每扫完一个站就落盘
-async function scanConfigCategories(configId) {
+async function scanConfigCategories(configId, mode) {
   if (catScanState.running && catScanState.configId === configId) return;
   const sites = (state.configId === configId ? state.sites : []) || [];
   const cmsSites = sites.filter((x) => !x.isDexSpider);
   const cache = loadCatCache(configId);
   const fp = sitesFingerprint(sites);
   const now = Date.now();
-  const todo = cmsSites.filter((site) => {
-    const rec = cache.sites[site.key];
-    const ttl = (rec && rec.src === 'baseline') ? CAT_BASELINE_TTL : CAT_SCAN_TTL;
-    return !rec || rec.fp !== siteFingerprint(site) || now - rec.at > ttl;
-  });
+  const onlyNew = mode !== 'all';
+  // 只扫「没有记录」的新源；手动扫描（mode=all）才全量重扫，已扫描过的记录不再自动过期
+  const todo = onlyNew ? cmsSites.filter((site) => !cache.sites[site.key]) : cmsSites.slice();
   // 当前站点优先扫，用户切换后能最快用上缓存
   const activeKey = state.activeSite ? state.activeSite.key : '';
   todo.sort((a, b) => (a.key === activeKey ? -1 : 0) - (b.key === activeKey ? -1 : 0));
@@ -442,7 +438,7 @@ async function applyConfig(row) {
   }
 
   // 配置就绪后：丢弃指纹不一致的旧扫描记录，并在后台补扫缺失/过期的站点
-  try { invalidateCatCache(row.id, state.sites || []); seedFromBaseline(row.id, state.sites || []); scanConfigCategories(row.id).catch(() => {}); } catch (e) {}
+  try { invalidateCatCache(row.id, state.sites || []); seedFromBaseline(row.id, state.sites || []); scanConfigCategories(row.id, 'missing').catch(() => {}); } catch (e) {}
   return state;
 }
 
@@ -585,7 +581,7 @@ app.post('/api/configs/:id/sync', async (req, res) => {
       state.activeSite = stillActive || pickDefaultSite(state.sites, row.default_site);
       state.loadError = null;
       state.sitesVersion = Date.now();
-      try { invalidateCatCache(row.id, state.sites || []); scanConfigCategories(row.id).catch(() => {}); } catch (e) {}
+      try { invalidateCatCache(row.id, state.sites || []); scanConfigCategories(row.id, 'missing').catch(() => {}); } catch (e) {}
       warmJvmIfNeeded();
     }
 
@@ -694,7 +690,7 @@ app.get('/api/categories/cache', (req, res) => {
   const siteKey = String(req.query.siteKey || (state.activeSite && state.activeSite.key) || '');
   const cache = loadCatCache(id);
   const rec = cache.sites[siteKey];
-  const fresh = !!(rec && Date.now() - rec.at < CAT_SCAN_TTL);
+  const fresh = !!rec;   // 有记录就可用（不再自动过期，手动扫描才刷新）
   res.json({ ok: !!rec, fresh, at: rec ? rec.at : 0, total: rec ? rec.total : 0, empty: rec ? rec.empty : [] });
 });
 
@@ -745,7 +741,7 @@ app.get('/api/categories/summary', (req, res) => {
     const rec = cache.sites[s.key];
     if (!rec) continue;
     cached++;
-    if (now - rec.at < CAT_SCAN_TTL) fresh++;
+    fresh = cached;
     if (rec.at > lastAt) lastAt = rec.at;
   }
   res.json({ ok: true, cms: sites.length, cached, fresh, lastAt, running: catScanState.running, scanned: catScanState.scanned, total: catScanState.total, current: catScanState.current });
@@ -759,7 +755,7 @@ app.post('/api/categories/scan', (req, res) => {
     cache.sites = {};
     saveCatCache(state.configId, cache);
   }
-  scanConfigCategories(state.configId).catch(() => {});
+  scanConfigCategories(state.configId, 'all').catch(() => {});
   res.json({ started: true });
 });
 
