@@ -718,13 +718,13 @@ app.post('/api/categories/export-baseline', (req, res) => {
 
 app.get('/api/category-filter', (req, res) => {
   const cfg = loadCategoryFilter();
-  res.json({ ok: true, file: CAT_FILTER_FILE, block: (cfg.block || []).length, allow: (cfg.allow || []).length, sites: Object.keys(cfg.sites || {}).length });
+  res.json({ ok: !catFilterCache.error, error: catFilterCache.error || null, file: CAT_FILTER_FILE, block: (cfg.block || []).length, allow: (cfg.allow || []).length, sites: Object.keys(cfg.sites || {}).length });
 });
 
 app.post('/api/category-filter/reload', (req, res) => {
-  catFilterCache = { mtime: 0, data: null };
+  catFilterCache = { mtime: 0, data: catFilterCache.data, error: null };
   const cfg = loadCategoryFilter();
-  res.json({ ok: true, block: (cfg.block || []).length, allow: (cfg.allow || []).length });
+  res.json({ ok: !catFilterCache.error, error: catFilterCache.error || null, block: (cfg.block || []).length, allow: (cfg.allow || []).length });
 });
 
 app.post('/api/category-filter/open', (req, res) => {
@@ -815,7 +815,7 @@ function requireSite(res) {
 // 按分类名包含匹配：伦理片/理论片/三级/福利 等一律不展示（源站可能混入这些分类）
 const CAT_FILTER_FILE = path.join(__dirname, 'category-filter.json');
 const DEFAULT_CAT_BLOCK = ['伦理', '倫理', '理论片', '成人', '情色', '里番', '三级', '两性', '写真', '擦边', '福利'];
-let catFilterCache = { mtime: 0, data: null };
+let catFilterCache = { mtime: 0, data: null, error: null };
 function defaultCatFilter() { return { version: 1, block: DEFAULT_CAT_BLOCK.slice(), allow: [], sites: {} }; }
 // 读取（文件不存在时自动生成一份带默认规则的，方便用户直接编辑）
 function loadCategoryFilter() {
@@ -831,15 +831,17 @@ function loadCategoryFilter() {
       allow: norm(obj && obj.allow),
       sites: (obj && obj.sites && typeof obj.sites === 'object') ? obj.sites : {}
     };
-    catFilterCache = { mtime: st.mtimeMs, data };
+    catFilterCache = { mtime: st.mtimeMs, data, error: null };
     return data;
   } catch (e) {
-    if (catFilterCache.data) return catFilterCache.data;   // 文件写坏了：继续用上一次成功的规则
+    const msg = 'JSON 语法错误：' + (e && e.message ? e.message : e);
+    if (catFilterCache.data) { catFilterCache.error = msg; return catFilterCache.data; }   // 沿用上次成功规则
+    if (catFilterCache.data) return catFilterCache.data;   // 文件写坏了：沿用上次成功的规则
     try {
       if (!fs.existsSync(CAT_FILTER_FILE)) fs.writeFileSync(CAT_FILTER_FILE, JSON.stringify(defaultCatFilter(), null, 2), 'utf-8');
     } catch (err) {}
     const d = defaultCatFilter();
-    catFilterCache = { mtime: 0, data: d };
+    catFilterCache = { mtime: 0, data: d, error: msg };
     return d;
   }
 }

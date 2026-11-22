@@ -1912,8 +1912,10 @@
       if (!txt) return;
       try {
         const s = await (await fetch('/api/category-filter')).json();
+        if (s.ok === false) { txt.textContent = '规则文件有语法错误（沿用上次规则）：' + (s.error || ''); txt.style.color = '#ff8a8a'; return; }
+        txt.style.color = '';
         txt.textContent = (s.block || 0) + ' 条屏蔽 · ' + (s.allow || 0) + ' 条白名单' + (s.sites ? ' · ' + s.sites + ' 个站点覆盖' : '');
-      } catch (e) { txt.textContent = '读取失败'; }
+    } catch (e) { txt.textContent = '读取失败'; }
     }
     async function openCatFilterFile() {
       try {
@@ -1925,7 +1927,8 @@
     async function reloadCatFilter() {
       try {
         const r = await (await fetch('/api/category-filter/reload', { method: 'POST' })).json();
-        showToast('已重新加载：' + (r.block || 0) + ' 条屏蔽 · ' + (r.allow || 0) + ' 条白名单', 4000);
+        if (r && r.ok === false) { showToast('重新加载失败：' + (r.error || '规则文件有语法错误'), 6000); }
+        else showToast('已重新加载：' + (r.block || 0) + ' 条屏蔽 · ' + (r.allow || 0) + ' 条白名单', 4000);
         await refreshCatFilterUI();
         loadHome();
       } catch (e) { showToast('重新加载失败：' + e.message, 5000); }
