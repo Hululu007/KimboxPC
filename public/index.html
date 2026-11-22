@@ -2947,6 +2947,12 @@
     // 豆瓣图床有防盗链（直连会 418），统一走本地 /api/img 代理；其它图床原样返回
     // 兜底代理地址：直连失败时用它再试一次（豆瓣图床/防盗链站源都能救回一部分）
     // 兜底代理地址：直连失败时用它再试一次（服务器会拆 @Referer 后缀当请求头）
+    // 直连兜底：剥掉 TVBox 的 @Referer/@User-Agent 后缀，直接交给浏览器
+    function directUrl(u) {
+      if (!u) return '';
+      return String(u).replace(/@(User-Agent|Referer|Cookie|Origin)=[\s\S]*$/i, '');
+    }
+
     function proxyUrl(u) {
       if (!u || !/^https?:\/\//i.test(String(u))) return '';
       return '/api/img?url=' + encodeURIComponent(String(u));
@@ -2985,7 +2991,7 @@
 
       setSafeHTML(card, `
         <div class="poster-wrap">
-          <img src="${escapeHtml(imgUrl(v.vod_pic || fallback))}" data-fallback="${escapeHtml(fallback)}" data-proxy="${escapeHtml(proxyUrl(v.vod_pic))}" referrerpolicy="no-referrer" loading="${idx < 12 ? 'eager' : 'lazy'}" decoding="async" width="300" height="450" fetchpriority="${idx < 12 ? 'high' : 'low'}">
+          <img src="${escapeHtml(imgUrl(v.vod_pic || fallback))}" data-fallback="${escapeHtml(fallback)}" data-proxy="${escapeHtml(proxyUrl(v.vod_pic))}" data-direct="${escapeHtml(directUrl(v.vod_pic))}" referrerpolicy="no-referrer" loading="${idx < 12 ? 'eager' : 'lazy'}" decoding="async" width="300" height="450" fetchpriority="${idx < 12 ? 'high' : 'low'}">
           ${v.vod_remarks ? `<div class="remarks">${escapeHtml(v.vod_remarks)}</div>` : ''}
           ${progress}
         </div>
@@ -3772,15 +3778,21 @@
     document.addEventListener('error', (e) => {
       const img = e.target;
       if (!img || img.tagName !== 'IMG' || !img.dataset) return;
-      // 直连失败：先尝试本地图片代理（服务器侧带 UA/Referer 拉，能救回防盗链的图）
-      if (img.dataset.proxy && img.dataset.proxy !== img.src && img.dataset.proxyDone !== '1') {
+      const isProxy = /\/api\/img\?/.test(img.src);
+      // 代理失败 → 试直连；直连失败 → 试代理；都失败才用占位图
+      if (isProxy && img.dataset.direct && img.dataset.directDone !== '1') {
+        img.dataset.directDone = '1';
+        img.src = img.dataset.direct;
+        return;
+      }
+      if (!isProxy && img.dataset.proxy && img.dataset.proxyDone !== '1') {
         img.dataset.proxyDone = '1';
         img.src = img.dataset.proxy;
         return;
       }
       if (img.dataset.fallback && img.dataset.fbDone !== '1') {
         img.dataset.fbDone = '1';
-        img.src = img.dataset.fallback;   // 代理也失败才换占位图
+        img.src = img.dataset.fallback;
       }
     }, true);
 
