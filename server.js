@@ -93,7 +93,9 @@ const LOCAL_HOSTS = [`127.0.0.1:${PORT}`, `localhost:${PORT}`];
 const LOCAL_ORIGINS = [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`];
 app.use((req, res, next) => {
   const host = String(req.headers.host || '').toLowerCase();
-  if (!LOCAL_HOSTS.includes(host)) return res.status(403).json({ error: 'forbidden host' });
+  // img1..img4.localhost 供海报代理分流（浏览器对单域名只有 6 条并发连接）
+  const isImgAlias = /^img\d+\.localhost:\d+$/.test(host);
+  if (!LOCAL_HOSTS.includes(host) && !isImgAlias) return res.status(403).json({ error: 'forbidden host' });
   const origin = req.headers.origin;
   if (origin) {
   // 只有「会改状态」的方法才校验 Origin：mpv 拉本地代理时会把站源的 Origin 头一并带上（GET），
@@ -1686,16 +1688,18 @@ function isPrivateHost(host) {
 
 // TVBox/FongMi 的图片地址常带 "@Referer=...@User-Agent=..." 后缀（豆瓣图全靠它过防盗链）
 // 这里把后缀拆出来当请求头，主地址仍用于请求与缓存键
-// 图片代理的并发闸门：豆瓣一被并发打就容易 403，串行化到 3 个并发并重试一次更稳
-let imgActive = 0;
-const imgWaiters = [];
-async function withImgSlot(fn) {
-  if (imgActive >= 3) await new Promise((r) => imgWaiters.push(r));
-  imgActive++;
+// 图片代理的并发控制：按图床限流（同域名最多 6 并发），避免豆瓣被突发打崩，
+// 同时不限制不同图床之间的并行度——浏览器对 127.0.0.1 只有 6 条连接，靠这里把等待转移到服务端。
+const imgHostActive = new Map();
+async function withImgSlot(host, fn) {
+  const key = String(host || "");
+  const isDb = /(^|\.)douban(io)?\.com$/i.test(key);
+  const max = isDb ? 6 : 12;   // 豆瓣容易封，限 6；其它图床放到 12，加速大列表
+  while ((imgHostActive.get(key) || 0) >= max) await new Promise((r) => setTimeout(r, 30));
+  imgHostActive.set(key, (imgHostActive.get(key) || 0) + 1);
   try { return await fn(); } finally {
-    imgActive--;
-    const next = imgWaiters.shift();
-    if (next) next();
+    const left = (imgHostActive.get(key) || 1) - 1;
+    if (left <= 0) imgHostActive.delete(key); else imgHostActive.set(key, left);
   }
 }
 
@@ -1736,27 +1740,34 @@ app.get('/api/img', async (req, res) => {
     return res.end(hit.buf);
   }
   // 豆瓣对 Referer 敏感：换几个来源各试一次（个别图片只认 www.douban.com）
-  const referers = ['https://' + host + '/', 'https://movie.douban.com/', ''];
+  // 豆瓣图床（xiugou-tv 实测配方）：UA + Referer(m.douban.com) 必须同时带，且 webp 比 jpg 小约 18%
+  const isDouban = /(^|\.)doubanio\.com$/i.test(host) || /(^|\.)douban\.com$/i.test(host);
+  const candidates = [];
+  if (isDouban && /\.jpg$/i.test(url)) candidates.push(url.replace(/\.jpg$/i, '.webp'));
+  candidates.push(url);
+  const referers = isDouban ? ['https://m.douban.com/'] : ['https://' + host + '/', ''];
   let lastErr = null;
-  for (const ref of referers) {
-    try {
-      const r = await withImgSlot(() => axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: 12000,
-        maxContentLength: 6 * 1024 * 1024,
-        maxRedirects: 3,
-          headers: Object.assign({ 'User-Agent': DESKTOP_UA, Referer: ref, Accept: 'image/*,*/*' }, urlHeaders),
-        validateStatus: (s) => s >= 200 && s < 300
-      }));
-      const type = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
-      if (!/^image\//i.test(type)) { lastErr = 'not-image:' + type; continue; }
-      const buf = Buffer.from(r.data);
-      if (IMG_CACHE.size >= IMG_CACHE_MAX) IMG_CACHE.delete(IMG_CACHE.keys().next().value);
-      IMG_CACHE.set(url, { buf, type, at: Date.now() });
-      res.setHeader('Content-Type', type);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      return res.end(buf);
-    } catch (e) { lastErr = e.message; }
+  outer: for (const cand of candidates) {
+    for (const ref of referers) {
+      try {
+        const r = await withImgSlot(host, () => axios.get(cand, {
+          responseType: 'arraybuffer',
+          timeout: 12000,
+          maxContentLength: 6 * 1024 * 1024,
+          maxRedirects: 3,
+          headers: Object.assign({ 'User-Agent': DESKTOP_UA, Referer: ref, Accept: 'image/avif,image/webp,image/*,*/*;q=0.8' }, isDouban ? {} : urlHeaders),
+          validateStatus: (s) => s >= 200 && s < 300
+        }));
+        const type = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
+        if (!/^image\//i.test(type)) { lastErr = 'not-image:' + type; continue; }
+        const buf = Buffer.from(r.data);
+        if (IMG_CACHE.size >= IMG_CACHE_MAX) IMG_CACHE.delete(IMG_CACHE.keys().next().value);
+        IMG_CACHE.set(url, { buf, type, at: Date.now() });
+        res.setHeader('Content-Type', type);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.end(buf);
+      } catch (e) { lastErr = e.message; }
+    }
   }
   // 都失败：交给浏览器直连（前端 onerror 会显示占位图），不再返回 502 干扰控制台
   res.redirect(302, url);

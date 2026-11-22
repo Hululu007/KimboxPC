@@ -1214,6 +1214,9 @@
     }
 </style>
     <!-- 海报图床预连接：省掉首屏 DNS/TLS 握手 -->
+    <link rel="preconnect" href="https://img1.doubanio.com" crossorigin>
+    <link rel="preconnect" href="https://img2.doubanio.com" crossorigin>
+    <link rel="preconnect" href="https://img3.doubanio.com" crossorigin>
     <link rel="preconnect" href="https://image.tmdb.org" crossorigin>
     <link rel="preconnect" href="https://img9.doubanio.com" crossorigin>
     <link rel="dns-prefetch" href="https://image.tmdb.org">
@@ -2949,13 +2952,18 @@
       return '/api/img?url=' + encodeURIComponent(String(u));
     }
 
-
-    // TVBox 的图片地址可能带 "@Referer=...@User-Agent=..." 后缀（浏览器发不了这种头，URL 也会失效）；
-    // 豆瓣图本身允许直连，所以先剥掉后缀直接用浏览器加载——直连失败再由 data-proxy 兜底走本地代理。
+    // 海报走本地代理，并用 img1..img4.localhost 分流：浏览器对单域名（含 127.0.0.1）只有 6 条并发连接，
+    // 4 个域名等于 24 条并发，服务端再按图床限流——这是对齐 xiugou-tv「几十张图同时下」的关键。
     function imgUrl(u) {
       if (!u) return '';
-      return String(u).replace(/@(User-Agent|Referer|Cookie|Origin)=[\s\S]*$/i, '');
+      const raw = String(u);
+      if (!/^https?:\/\//i.test(raw)) return raw;
+      let h = 1;
+      for (let k = 0; k < raw.length; k++) h = (h * 31 + raw.charCodeAt(k)) >>> 0;
+      const sub = 1 + (h % 4);
+      return 'http://img' + sub + '.localhost:' + (location.port || '3980') + '/api/img?url=' + encodeURIComponent(raw);
     }
+
 
 
     function buildCard(v, idx = 0) {
