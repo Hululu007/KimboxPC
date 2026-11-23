@@ -1795,20 +1795,8 @@
       const keep = activeKey || select.value;
       const ping = window.__sitePing || {};
 
-      // 排序：可用的按延迟从快到慢，超时的排后面，加固虫包最后
-      const rank = (s) => {
-        if (s.isDexSpider) return 3;
-        const p = ping[s.key];
-        if (!p) return 2;          // 还没测到
-        if (!p.ok) return 2;
-        return 0;
-      };
-      const sorted = sites.toSorted((a, b) => {
-        const ra = rank(a), rb = rank(b);
-        if (ra !== rb) return ra - rb;
-        const pa = ping[a.key] || {}, pb = ping[b.key] || {};
-        return (pa.ms || 99999) - (pb.ms || 99999);
-      });
+  // 保持配置文件里的站点顺序（不按延迟/类型重排）；延迟只作为文字标注
+  const sorted = sites.slice();
 
       select.replaceChildren();
       sorted.forEach(s => {
@@ -1817,7 +1805,9 @@
         if (s.isDexSpider) {
           // 虫包装载（解壳 + dex2jar）首次要十几秒；JVM 运行时缺失时不可选
           const jvmOk = !!(window.__jvmStatus && window.__jvmStatus.installed && window.__jvmStatus.enabled);
-          opt.textContent = `🧩 ${s.name} (JVM 虫包)`;
+      const sp = ping[s.key];
+      const spLabel = sp && sp.ms ? ' · ' + (sp.ms >= 1000 ? (sp.ms / 1000).toFixed(1) + 's' : Math.round(sp.ms) + 'ms') : '';
+      opt.textContent = `🧩 ${s.name} (JVM 虫包)${spLabel}`;
           opt.disabled = !jvmOk;
           opt.title = jvmOk
             ? '虫包站源：首次加载需 10~20 秒（解壳 + 转换），之后走缓存'
@@ -1828,17 +1818,40 @@
           if (p && p.ok && p.ms) opt.title = `响应约 ${p.ms} ms`;
           else if (p && !p.ok) opt.title = '该站点暂无响应';
         }
+
         select.appendChild(opt);
       });
 
       const pick = (keep && sites.some(s => s.key === keep)) ? keep
-        : (activeKey || (sorted.find(s => !s.isDexSpider) || {}).key);
+    : (activeKey || (sorted[0] || {}).key);
       if (pick) {
         select.value = pick;
         activeSiteKey = pick;
       }
       updateDefaultSiteUI();
     }
+
+// 虫包延迟：用户展开站点下拉时按需实测（一次一个，结果 30 分钟内复用）
+let spiderPingRunning = false;
+async function measureSpiderLatencies() {
+  if (spiderPingRunning) return;
+  const jvmOk = !!(window.__jvmStatus && window.__jvmStatus.installed && window.__jvmStatus.enabled);
+  if (!jvmOk) return;
+  const list = (window.__siteList || []).filter((s) => s.isDexSpider);
+  const pending = list.filter((s) => { const p = (window.__sitePing || {})[s.key]; return !p || !p.ms; });
+  if (!pending.length) return;
+  spiderPingRunning = true;
+  try {
+    for (const s of pending) {
+      const r = await fetch('/api/sites/ping-spider', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: s.key }) }).then((x) => x.json()).catch(() => null);
+      if (r) {
+        window.__sitePing = window.__sitePing || {};
+        window.__sitePing[s.key] = { ms: r.ms || 0, ok: !!r.ok, dex: true };
+        renderSiteOptions(window.__siteList || [], activeSiteKey);
+      }
+    }
+  } finally { spiderPingRunning = false; }
+}
 
     /* ---------- 自动更新（GitHub Releases） ---------- */
     function renderUpdateUI(s) {
@@ -2159,6 +2172,12 @@
           })
           .catch(() => {})
           .finally(() => { window.__pinging = false; });
+        const sel = document.getElementById('siteSelect');
+        if (sel && !sel.__spiderPingBound) {
+          sel.__spiderPingBound = true;
+          sel.addEventListener('mousedown', () => measureSpiderLatencies());
+          sel.addEventListener('focus', () => measureSpiderLatencies());
+        }
       }
     }
 

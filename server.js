@@ -173,10 +173,16 @@ const state = {
   sitesVersion: Date.now()
 };
 
-/** 选中一个「能立刻用」的站点：优先非虫包（虫包首次加载要十几秒，不该卡住首页） */
+/** 选中默认站点：设了默认源就用它；没设就按配置文件顺序取第一个（虫包也一样，JVM 不可用时才退回非虫包） */
 function pickDefaultSite(list, preferredKey) {
   const preferred = preferredKey ? list.find(s => s.key === preferredKey) : null;
-  return preferred || list.find(s => !s.isDexSpider) || list[0] || null;
+  if (preferred) return preferred;
+  const first = list[0] || null;
+  // 没设默认源：按配置文件顺序取第一个；虫包但 JVM 不可用时才退回第一个非虫包
+  if (first && first.isDexSpider && !JvmBridge.installed()) {
+    return list.find(s => !s.isDexSpider) || first;
+  }
+  return first;
 }
 
 /** 统一搜索入口：虫包走 JVM 桥，普通 CMS 走 CmsEngine */
@@ -797,6 +803,35 @@ app.get('/api/sites/ping', async (req, res) => {
   }
   res.json({ results: out, ts: Date.now() });
 });
+
+/* 虫包（JVM 站源）单站测速：真正调用一次 homeContent，耗时写进 sitePingCache（30 分钟内复用） */
+app.post('/api/sites/ping-spider', async (req, res) => {
+  const key = String((req.body && req.body.key) || '').trim();
+  const site = (state.sites || []).find((s) => s.key === key);
+  if (!site) return res.status(404).json({ error: '站点不存在' });
+  if (!site.isDexSpider) return res.status(400).json({ error: '不是虫包站点' });
+  const js = JvmBridge.status();
+  if (!js.installed || !js.enabled) return res.json({ ok: false, ms: 0, unsupported: true });
+  const hit = sitePingCache.get(site.key);
+  if (hit && hit.dex && Date.now() - hit.ts < 30 * 60 * 1000) {
+    return res.json({ ok: hit.ok, ms: hit.ms, dex: true, cached: true });
+  }
+  const t0 = Date.now();
+  try {
+    await Promise.race([
+      SpiderEngine.home(site, state.spider),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 30000))
+    ]);
+    const ms = Date.now() - t0;
+    sitePingCache.set(site.key, { ms, ok: true, dex: true, ts: Date.now() });
+    res.json({ ok: true, ms, dex: true });
+  } catch (e) {
+    const ms = Date.now() - t0;
+    sitePingCache.set(site.key, { ms, ok: false, dex: true, ts: Date.now() });
+    res.json({ ok: false, ms, dex: true, error: e.message === 'timeout' ? '加载超时' : e.message });
+  }
+});
+
 
 /* ==================== 影视数据 ==================== */
 
