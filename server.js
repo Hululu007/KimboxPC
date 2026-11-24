@@ -206,11 +206,16 @@ function warmJvmIfNeeded() {
    加固站首次要「下载 jar → 解壳 → dex2jar → 实例化」，单站 10~20 秒。
    空闲时后台按 2 并发把这些站点都 load 一遍，用户点开时直接命中缓存；
    同一份 jar 只会解一次，后面的站点主要是类加载，几百毫秒级。 */
+// 预热并发可用环境变量 PRELOAD_CONCURRENCY 调整（默认 2）
 const preloadState = { total: 0, done: 0, ok: 0, failed: 0, running: false, startedAt: 0, fingerprint: '' };
 
 function preloadSpiderSites() {
   if (!JvmBridge.installed()) return;
-  const list = state.sites.filter(s => s.isDexSpider && s.searchable !== 0);
+  // 仍是「一次预热全部」，但把当前/默认站点排到队首：冷启动时首屏不用排在其它虫包后面
+  const activeKey = state.activeSite ? state.activeSite.key : '';
+  const list = state.sites
+    .filter(s => s.isDexSpider && s.searchable !== 0)
+    .sort((a, b) => (a.key === activeKey ? 0 : 1) - (b.key === activeKey ? 0 : 1));
   if (!list.length) return;
   const fingerprint = list.map(s => s.key).join('|') + '#' + state.spider;
   if (preloadState.running || preloadState.fingerprint === fingerprint) return;
@@ -232,7 +237,7 @@ function preloadSpiderSites() {
         preloadState.done++;
       }
     };
-    await Promise.all([worker(), worker()]);
+await Promise.all(Array.from({ length: Math.max(1, Math.min(8, Number(process.env.PRELOAD_CONCURRENCY) || 2)) }, () => worker()));
     preloadState.running = false;
     JvmBridge.log(`[preload] 完成：成功 ${preloadState.ok}，失败 ${preloadState.failed}，耗时 ${Date.now() - preloadState.startedAt}ms`);
   })().catch(e => { preloadState.running = false; JvmBridge.log('[preload] 异常: ' + e.message); });
