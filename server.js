@@ -191,51 +191,74 @@ async function searchSite(site, wd, page) {
   return CmsEngine.search(site, wd, page);
 }
 
-/** 配置里有虫包站点时，提前把 JVM 服务拉起来（只起进程，不加载站点，约 1 秒） */
+/** 配置里有虫包时，先拉起 JVM；随后立刻预热当前站点，其余延后 2.5 秒（不挡首屏） */
+let warmStartedKey = '';
 function warmJvmIfNeeded() {
-  if (!state.sites.some(s => s.isDexSpider)) return;
+  if (!state.sites.some((s) => s.isDexSpider)) return;
   if (!JvmBridge.installed()) return;
+  // applyConfig 的「缓存秒开」和「远程刷新」会各调一次：同一份站点只预热一次
+  const key = state.configId + '#' + state.sites.map((s) => s.key).join('|');
+  if (warmStartedKey === key) return;
+  warmStartedKey = key;
   setImmediate(() => {
     JvmBridge.ensureStarted()
-      .then(() => preloadSpiderSites())
-      .catch(e => JvmBridge.log('[warm] ' + e.message));
+      .then(() => {
+        const activeKey = state.activeSite ? state.activeSite.key : '';
+        // 当前/默认站优先：虫包默认源的首页海报墙不用等
+        if (activeKey) preloadSpiderSites({ onlyKeys: [activeKey] });
+        // 其余虫包延后预热：先让窗口和首屏把资源拿走
+        setTimeout(() => {
+          preloadSpiderSites(activeKey ? { excludeKeys: [activeKey] } : {});
+        }, 2500);
+      })
+      .catch((e) => JvmBridge.log('[warm] ' + e.message));
   });
 }
 
 /* ---------- 虫包站点启动预加载 ----------
    加固站首次要「下载 jar → 解壳 → dex2jar → 实例化」，单站 10~20 秒。
-   空闲时后台按 2 并发把这些站点都 load 一遍，用户点开时直接命中缓存；
-   同一份 jar 只会解一次，后面的站点主要是类加载，几百毫秒级。 */
-const preloadState = { total: 0, done: 0, ok: 0, failed: 0, running: false, startedAt: 0, fingerprint: '' };
+   启动时只预热当前站点，2.5 秒后再把其余排进同一队列（串行、每批 2 个），不抢首屏资源。 */
+const preloadState = { total: 0, done: 0, ok: 0, failed: 0, running: false, startedAt: 0, loaded: new Set(), results: new Map(), queue: [] };
 
-function preloadSpiderSites() {
+function preloadSpiderSites(opts) {
   if (!JvmBridge.installed()) return;
-  const list = state.sites.filter(s => s.isDexSpider && s.searchable !== 0);
+  const option = opts || {};
+  const all = state.sites.filter((s) => s.isDexSpider && s.searchable !== 0);
+  preloadState.total = all.length;
+  let list = all.filter((s) => !preloadState.loaded.has(s.key) && !preloadState.results.has(s.key));
+  if (Array.isArray(option.onlyKeys)) list = list.filter((s) => option.onlyKeys.includes(s.key));
+  if (Array.isArray(option.excludeKeys)) list = list.filter((s) => !option.excludeKeys.includes(s.key));
   if (!list.length) return;
-  const fingerprint = list.map(s => s.key).join('|') + '#' + state.spider;
-  if (preloadState.running || preloadState.fingerprint === fingerprint) return;
+  for (const s of list) {
+    if (!preloadState.queue.some((q) => q.key === s.key)) preloadState.queue.push(s);
+  }
+  runPreloadQueue();
+}
 
-  Object.assign(preloadState, { total: list.length, done: 0, ok: 0, failed: 0, running: true, startedAt: Date.now(), fingerprint });
-  JvmBridge.log(`[preload] 开始预加载 ${list.length} 个虫包站点`);
-  (async () => {
-    const queue = list.slice();
-    const worker = async () => {
-      while (queue.length) {
-        const s = queue.shift();
+async function runPreloadQueue() {
+  if (preloadState.running) return;
+  preloadState.running = true;
+  preloadState.startedAt = preloadState.startedAt || Date.now();
+  JvmBridge.log('[preload] 队列启动，待加载 ' + preloadState.queue.length);
+  try {
+    while (preloadState.queue.length) {
+      const batch = preloadState.queue.splice(0, 2);   // 并发 2
+      await Promise.all(batch.map(async (s) => {
         try {
           const ok = await JvmBridge.loadSite({ siteKey: s.key, api: s.api, ext: s.ext || '', jar: state.spider, timeoutMs: 240000 });
-          if (ok) preloadState.ok++; else preloadState.failed++;
+          preloadState.results.set(s.key, ok ? 'ok' : 'fail');
+          if (ok) preloadState.loaded.add(s.key);
         } catch (e) {
-          preloadState.failed++;
+          preloadState.results.set(s.key, 'fail');
           JvmBridge.log(`[preload] ${s.key} 失败: ${e.message}`);
         }
-        preloadState.done++;
-      }
-    };
-    await Promise.all([worker(), worker()]);
+      }));
+    }
+  } finally {
     preloadState.running = false;
-    JvmBridge.log(`[preload] 完成：成功 ${preloadState.ok}，失败 ${preloadState.failed}，耗时 ${Date.now() - preloadState.startedAt}ms`);
-  })().catch(e => { preloadState.running = false; JvmBridge.log('[preload] 异常: ' + e.message); });
+    const failed = [...preloadState.results.values()].filter((v) => v === 'fail').length;
+    JvmBridge.log('[preload] 完成：' + preloadState.results.size + '/' + preloadState.total + '，失败 ' + failed + '，耗时 ' + (Date.now() - preloadState.startedAt) + 'ms');
+  }
 }
 
 function publicSite(s) {
@@ -975,7 +998,7 @@ app.get('/api/search', async (req, res) => {
 app.get('/api/jvm/status', (req, res) => {
   res.json(Object.assign(JvmBridge.status(), {
     spiderSites: state.sites.filter(s => s.isDexSpider).length,
-    preload: Object.assign({}, preloadState, { fingerprint: undefined })
+    preload: { total: preloadState.total, done: preloadState.results.size, ok: [...preloadState.results.values()].filter((v) => v === 'ok').length, failed: [...preloadState.results.values()].filter((v) => v === 'fail').length, running: preloadState.running, startedAt: preloadState.startedAt, loaded: preloadState.loaded.size, queued: preloadState.queue.length }
   }));
 });
 
