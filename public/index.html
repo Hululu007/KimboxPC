@@ -1552,6 +1552,22 @@
               <option value="300">5 分钟（300 秒）</option>
             </select>
           </label>
+          <label class="audio-auto" title="解码方式：自动=mpv auto-safe（优先硬解，驱动不支持时退回软解）；强制硬解=d3d11va-copy；软解=纯 CPU。切换后需重开当前集生效">
+            解码
+            <select id="hwdecSel" class="ctrl-rate" onchange="saveHwdecMode(this.value)" style="width:auto">
+              <option value="auto">自动（推荐）</option>
+              <option value="hw">强制硬解</option>
+              <option value="sw">软解（CPU）</option>
+            </select>
+          </label>
+          <label class="audio-auto" title="渲染分辨率：软件渲染链路每帧都要转 RGB 并走 IPC，老机器降到 720p 能明显省 CPU（显示时再放大）">
+            渲染
+            <select id="renderResSel" class="ctrl-rate" onchange="saveRenderRes(this.value)" style="width:auto">
+              <option value="auto">跟随窗口</option>
+              <option value="720">720p（省 CPU）</option>
+              <option value="1080">1080p</option>
+            </select>
+          </label>
         </div>
 
 
@@ -3437,9 +3453,16 @@ function isBlockedCatName(name) {
       const r = stage ? stage.getBoundingClientRect() : { width: 1280, height: 720 };
       let w = Math.max(480, Math.floor(r.width));
       let h = Math.max(270, Math.floor(r.height));
-      const maxW = 1600, maxH = 900;
+      // 「渲染」设置：auto 保持 1600x900 上限；1080p 放宽到 1920x1080；720p 再按高度压到 720
+      const mode = renderResMode();
+      const maxW = mode === '1080' ? 1920 : 1600, maxH = mode === '1080' ? 1080 : 900;
       const k = Math.min(1, maxW / w, maxH / h);
       w = Math.round(w * k); h = Math.round(h * k);
+      const capH = mode === '720' ? 720 : 0;
+      if (capH && h > capH) {
+        const k2 = capH / h;
+        w = Math.round(w * k2); h = capH;
+      }
       // 偶数尺寸，避免解码器对齐问题
       w -= w % 2; h -= h % 2;
       return { w, h };
@@ -3795,6 +3818,8 @@ function isBlockedCatName(name) {
       syncAdFilterUI();
       syncAdModeUI();
       syncCacheUI();
+      syncPlaybackOptsUI();
+      pushPlaybackOpts();
       // 恢复信息层（OSD）显示状态
       {
         const o = document.getElementById('pvOsd');
@@ -4299,6 +4324,51 @@ function isBlockedCatName(name) {
     function syncCacheUI() {
       const el = document.getElementById('cacheSel');
       if (el) el.value = String(cacheSecs());
+    }
+    /* ---------- 播放设置：解码方式 / 渲染分辨率 ----------
+       解码：auto=mpv auto-safe（优先硬解）｜hw=强制 d3d11va-copy｜sw=纯 CPU
+       渲染：auto=跟随窗口（上限 1600x900）｜720/1080=按高度设上限，老机器降 CPU */
+    function hwdecMode() {
+      try { const v = localStorage.getItem('tvbox_hwdec') || 'auto'; return ['auto', 'hw', 'sw'].includes(v) ? v : 'auto'; }
+      catch (e) { return 'auto'; }
+    }
+    function renderResMode() {
+      try { const v = localStorage.getItem('tvbox_render_res') || 'auto'; return ['auto', '720', '1080'].includes(v) ? v : 'auto'; }
+      catch (e) { return 'auto'; }
+    }
+    function syncPlaybackOptsUI() {
+      const a = document.getElementById('hwdecSel');
+      if (a) a.value = hwdecMode();
+      const b = document.getElementById('renderResSel');
+      if (b) b.value = renderResMode();
+    }
+    function pushPlaybackOpts() {
+      try {
+        if (window.kimbox && window.kimbox.setPlaybackOpts) {
+          window.kimbox.setPlaybackOpts({ hwdec: hwdecMode(), renderRes: renderResMode() }).catch(() => {});
+        }
+      } catch (e) {}
+    }
+    function saveHwdecMode(v) {
+      try { localStorage.setItem('tvbox_hwdec', String(v)); } catch (e) {}
+      pushPlaybackOpts();
+      const label = { auto: '自动（优先硬解）', hw: '强制硬解', sw: '软解（CPU）' }[v] || v;
+      showToast(`解码方式：${label}（重开当前集生效）`, 3500);
+    }
+    function saveRenderRes(v) {
+      try { localStorage.setItem('tvbox_render_res', String(v)); } catch (e) {}
+      pushPlaybackOpts();
+      applyRenderResNow();
+      const label = { auto: '跟随窗口', 720: '720p', 1080: '1080p' }[v] || v;
+      showToast(`渲染分辨率：${label}（立即生效）`, 3000);
+    }
+    function applyRenderResNow() {
+      if (!isMpv() || !isNativeShell()) return;
+      try {
+        if (!document.getElementById('playerView').classList.contains('active')) return;
+        const { w, h } = calcRenderSize();
+        window.kimbox.resize(w, h).catch(() => {});
+      } catch (e) {}
     }
 
     /* ---------- 信息层（OSD） ----------

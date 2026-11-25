@@ -39,6 +39,10 @@ let renderTimer = null;     // 渲染循环
 let frameCount = 0;
 let renderW = 1280;
 let renderH = 720;
+// 播放设置（前端通过 playback:opts 下发）：解码方式 + 渲染分辨率上限
+// auto = mpv 默认 auto-safe（优先硬解）；hw = 强制 d3d11va-copy；sw = 纯 CPU
+let playbackOpts = { hwdec: 'auto', renderRes: 'auto' };
+const HWDEC_VALUES = { auto: 'auto-safe', hw: 'd3d11va-copy', sw: 'no' };
 let lastFrameAt = 0;
 let lastKnownDuration = 0;
 let lastKnownPosition = 0;   // 见过的最远播放位置（中途 EOF 时 time-pos 会归零）
@@ -611,7 +615,7 @@ function ensureInstance(opts) {
   if (inst) return inst;
   inst = native.create(opts || {
     vo: 'libmpv',
-    hwdec: 'auto-safe',
+    hwdec: HWDEC_VALUES[playbackOpts.hwdec] || 'auto-safe',
     cache: 'yes',
     'audio-client-name': 'KimBoxPC',
     'keep-open': 'no',
@@ -895,6 +899,22 @@ ipcMain.handle('mpv:resize', (evt, { width, height }) => {
       else native.initRender(inst, renderW, renderH);
     }
     return { ok: true, render: `${renderW}x${renderH}` };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+// 播放设置：解码方式 + 渲染分辨率上限（前端「播放选项」的两个下拉框）
+ipcMain.handle('playback:opts', (evt, opts) => {
+  try {
+    const o = opts || {};
+    if (['auto', 'hw', 'sw'].includes(o.hwdec)) playbackOpts.hwdec = o.hwdec;
+    if (['auto', '720', '1080'].includes(o.renderRes)) playbackOpts.renderRes = o.renderRes;
+    // hwdec 是 mpv 的运行时可写属性：先设上，当前文件通常要重开这一集才真正换解码器
+    if (inst && native) {
+      try { native.setProp(inst, 'hwdec', HWDEC_VALUES[playbackOpts.hwdec] || 'auto-safe'); } catch (e) {}
+    }
+    return { ok: true, hwdec: playbackOpts.hwdec, renderRes: playbackOpts.renderRes };
   } catch (e) {
     return { error: e.message };
   }

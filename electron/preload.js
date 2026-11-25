@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('kimbox', {
   state: () => ipcRenderer.invoke('mpv:state'),
   stop: () => ipcRenderer.invoke('mpv:stop'),
   resize: (width, height) => ipcRenderer.invoke('mpv:resize', { width, height }),
+  // 播放设置：解码方式（auto/hw/sw）与渲染分辨率上限（auto/720/1080）
+  setPlaybackOpts: (opts) => ipcRenderer.invoke('playback:opts', opts),
 
   // 全屏
   setFullscreen: (on) => ipcRenderer.invoke('shell:fullscreen', { on }),
