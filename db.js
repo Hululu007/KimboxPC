@@ -261,6 +261,7 @@ function pruneAuto() {
  * @param {string} label  手动备份传 'manual'，其余均视为自动备份
  */
 function backup(label = 'auto') {
+  invalidateBackupsCache();
   try {
     const stats = countAll();
     if (stats.config + stats.favorite + stats.history === 0) {
@@ -280,9 +281,13 @@ function backup(label = 'auto') {
   }
 }
 
+let backupsCache = { at: 0, list: [] };
+function invalidateBackupsCache() { backupsCache.at = 0; }
 function listBackups() {
+  // 备份目录只在本程序内变化：2 秒 TTL，避免状态面板轮询时反复 readdir+stat
+  if (Date.now() - backupsCache.at < 2000) return backupsCache.list;
   if (!fs.existsSync(BACKUP_DIR)) return [];
-  return fs.readdirSync(BACKUP_DIR)
+  const list = fs.readdirSync(BACKUP_DIR)
     .filter(f => f.endsWith('.db'))
     .map(f => {
       const full = path.join(BACKUP_DIR, f);
@@ -297,6 +302,8 @@ function listBackups() {
     })
     .sort((a, b) => b.mtime - a.mtime)      // 新的在前
     .map(({ mtime, ...rest }) => rest);
+  backupsCache = { at: Date.now(), list };
+  return list;
 }
 
 /** 校验备份文件名，防目录穿越 */
@@ -309,6 +316,7 @@ function safeBackupPath(name) {
 }
 
 function deleteBackup(name) {
+  invalidateBackupsCache();
   const full = safeBackupPath(name);
   fs.unlinkSync(full);
   return { deleted: name };
@@ -319,6 +327,7 @@ function deleteBackup(name) {
  * 调用方需要在还原前先做一次安全备份
  */
 function restoreBackup(name) {
+  invalidateBackupsCache();
   const full = safeBackupPath(name);
 
   // 先做一次「还原前」自动备份，防止还原错了还能回退

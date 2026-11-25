@@ -60,8 +60,14 @@ function log(line) {
 }
 
 /** 运行时是否齐全（发布包里应恒为 true；源码 clone 未跑 fetch-jvm 时为 false） */
+let installedCache = { at: 0, val: false };
 function installed() {
-  return fs.existsSync(JAR) && fs.existsSync(path.join(JVM_DIR, 'bcprov-jdk18on-1.78.1.jar'));
+  const now = Date.now();
+  // 运行时文件不会在运行中突然出现/消失：3 秒 TTL 足够，状态面板轮询不再反复 stat
+  if (now - installedCache.at < 3000) return installedCache.val;
+  const val = fs.existsSync(JAR) && fs.existsSync(path.join(JVM_DIR, 'bcprov-jdk18on-1.78.1.jar'));
+  installedCache = { at: now, val };
+  return val;
 }
 
 /** 按「随包 JRE → JAVA_HOME → PATH」找 java，并校验主版本 ≥ 21 */

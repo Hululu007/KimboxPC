@@ -260,11 +260,19 @@ const CAT_BASELINE_FILE = path.join(__dirname, 'category-baseline.json');
 const catScanState = { configId: null, running: false, total: 0, scanned: 0, current: '' };
 
 function catCachePath(id) { return path.join(CONFIG_CACHE_DIR, 'categories_' + id + '.json'); }
+const catCacheMemo = new Map();   // id -> { mtime, size, data }
 function loadCatCache(id) {
+  const file = catCachePath(id);
   try {
-    const raw = fs.readFileSync(catCachePath(id), 'utf-8');
-    const obj = JSON.parse(raw);
-    if (obj && obj.version === 1 && obj.sites) return obj;
+    const st = fs.statSync(file);
+    const hit = catCacheMemo.get(id);
+    // 文件没变就复用：分类缓存有几十 KB，避免每个请求重复 read+parse
+    if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit.data;
+    const obj = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (obj && obj.version === 1 && obj.sites) {
+      catCacheMemo.set(id, { mtime: st.mtimeMs, size: st.size, data: obj });
+      return obj;
+    }
   } catch (e) {}
   return { version: 1, fingerprint: '', sites: {} };
 }
@@ -1939,11 +1947,17 @@ app.delete('/api/favorites/:siteKey/:vodId', (req, res) => {
 const PKG = require('./package.json');
 
 /** 读取 更新.md 里最新的版本号，用于校验 package.json 是否忘记同步 */
+let changelogCache = { mtime: -1, version: null };
 function latestChangelogVersion() {
   try {
-    const md = fs.readFileSync(path.join(__dirname, '更新.md'), 'utf8');
+    const file = path.join(__dirname, '更新.md');
+    const st = fs.statSync(file);
+    // 更新日志很少变：按 mtime 命中缓存，/api/version 不再每次重读整个文件
+    if (changelogCache.mtime === st.mtimeMs) return changelogCache.version;
+    const md = fs.readFileSync(file, 'utf8');
     const m = md.match(/^##\s*\[([0-9]+\.[0-9]+\.[0-9]+)\]/m);
-    return m ? m[1] : null;
+    changelogCache = { mtime: st.mtimeMs, version: m ? m[1] : null };
+    return changelogCache.version;
   } catch (e) {
     return null;
   }
