@@ -4359,7 +4359,12 @@ function isBlockedCatName(name) {
       const t3 = document.getElementById('osdTime');
       const t4 = document.getElementById('osdSpeed');
 
-      if (t1) t1.textContent = `${displayTitle || 'KimBoxPC'}\n${w && h ? w + ' × ' + h : '分辨率未知'}`;
+      // 第二行补「源名 · 线路」：排查播放问题时，一眼看出当前用的是哪个站点、哪条线路
+    const siteLabel = siteNameOf(activeSiteKey);
+    const lineLabel = (curSource && (curSource.sourceName || curSource.name))
+      || (currentDetail && currentDetail.playSources && currentDetail.playSources.length > 1 ? `线路 ${currentSourceIdx + 1}` : '');
+    const metaLine = [siteLabel, lineLabel].filter(Boolean).join(' · ');
+    if (t1) t1.textContent = `${displayTitle || 'KimBoxPC'}\n${metaLine ? metaLine + '\n' : ''}${w && h ? w + ' × ' + h : '分辨率未知'}`;
       if (t1) t1.style.whiteSpace = 'pre';
       if (t2) t2.textContent = new Date().toLocaleTimeString();
       if (t3) t3.textContent = `${fmtTime(pos)} / ${dur > 0 ? fmtTime(dur) : '--:--'}`;
